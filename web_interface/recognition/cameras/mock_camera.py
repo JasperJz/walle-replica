@@ -6,9 +6,11 @@ built-in webcam or video files.
 """
 
 import logging
+import time
 from typing import Optional, Tuple
 import numpy as np
 import cv2
+from threading import Lock
 
 logger = logging.getLogger(__name__)
 
@@ -35,6 +37,8 @@ class MockCamera:
         self.cap: Optional[cv2.VideoCapture] = None
         self._connected = False
         self._fps = 30.0
+        self._lock = Lock()
+        self._read_error_count = 0
     
     def connect(self) -> bool:
         """
@@ -50,24 +54,33 @@ class MockCamera:
                 logger.error(f"Failed to open camera {self.camera_index}")
                 return False
             
-            # Set resolution
-            self.cap.set(cv2.CAP_PROP_FRAME_WIDTH, self.width)
-            self.cap.set(cv2.CAP_PROP_FRAME_HEIGHT, self.height)
-            
-            # Set FPS (optional, may not work on all cameras)
-            self.cap.set(cv2.CAP_PROP_FPS, 30)
+            # Set resolution with error handling
+            try:
+                self.cap.set(cv2.CAP_PROP_FRAME_WIDTH, self.width)
+                self.cap.set(cv2.CAP_PROP_FRAME_HEIGHT, self.height)
+                self.cap.set(cv2.CAP_PROP_FPS, 30)
+            except Exception as e:
+                logger.warning(f"Could not set camera properties: {e}")
             
             # Get FPS
-            self._fps = self.cap.get(cv2.CAP_PROP_FPS)
-            if self._fps <= 0:
+            try:
+                self._fps = self.cap.get(cv2.CAP_PROP_FPS)
+                if self._fps <= 0:
+                    self._fps = 30.0
+            except Exception as e:
+                logger.warning(f"Could not get FPS: {e}")
                 self._fps = 30.0
             
             # Try to read a few frames to warm up the camera
-            # Some cameras need a few frames to initialize properly
-            for _ in range(3):
-                ret, frame = self.cap.read()
-                if ret:
-                    break
+            frame = None
+            for i in range(5):
+                try:
+                    ret, frame = self.cap.read()
+                    if ret and frame is not None:
+                        break
+                except Exception as e:
+                    logger.warning(f"Warmup frame {i} failed: {e}")
+                    time.sleep(0.1)
             
             # If we got at least one frame, consider it a success
             if frame is not None:
@@ -76,15 +89,21 @@ class MockCamera:
                 return True
             else:
                 logger.error("Failed to read initial frames from camera")
-                self.cap.release()
+                try:
+                    self.cap.release()
+                except Exception as e:
+                    logger.warning(f"Error releasing camera: {e}")
                 self.cap = None
                 return False
             
         except Exception as e:
             logger.error(f"Error connecting to mock camera: {e}")
-            if self.cap is not None:
-                self.cap.release()
-                self.cap = None
+            try:
+                if self.cap is not None:
+                    self.cap.release()
+            except Exception as release_error:
+                logger.warning(f"Error releasing camera on exception: {release_error}")
+            self.cap = None
             return False
     
     def disconnect(self) -> bool:
@@ -95,10 +114,11 @@ class MockCamera:
             True if disconnection successful, False otherwise
         """
         try:
-            if self.cap is not None:
-                self.cap.release()
-                self.cap = None
-            self._connected = False
+            with self._lock:
+                if self.cap is not None:
+                    self.cap.release()
+                    self.cap = None
+                self._connected = False
             logger.info("MockCamera disconnected")
             return True
         except Exception as e:
@@ -116,7 +136,7 @@ class MockCamera:
     
     def get_frame(self) -> Optional[np.ndarray]:
         """
-        Get the next frame from the camera.
+        Get the next frame from the camera (thread-safe, with error recovery).
         
         Returns:
             Frame as numpy array in BGR format, or None if unavailable
@@ -124,14 +144,30 @@ class MockCamera:
         if not self.is_connected():
             return None
         
-        try:
-            ret, frame = self.cap.read()
-            if ret:
-                return frame
-            return None
-        except Exception as e:
-            logger.error(f"Error reading frame: {e}")
-            return None
+        with self._lock:
+            try:
+                if self.cap is None or not self.cap.isOpened():
+                    logger.warning("Camera not connected in get_frame()")
+                    self._connected = False
+                    return None
+                
+                ret, frame = self.cap.read()
+                if ret and frame is not None:
+                    self._read_error_count = 0
+                    return frame
+                else:
+                    self._read_error_count += 1
+                    if self._read_error_count > 15:
+                        logger.warning(f"Camera read failures exceed threshold ({self._read_error_count}), marking as disconnected")
+                        self._connected = False
+                    return None
+            except Exception as e:
+                self._read_error_count += 1
+                logger.debug(f"Error reading frame (attempt {self._read_error_count}): {e}")
+                if self._read_error_count > 15:
+                    logger.error(f"Repeated camera errors ({self._read_error_count}), disconnecting")
+                    self._connected = False
+                return None
     
     def get_resolution(self) -> Tuple[int, int]:
         """

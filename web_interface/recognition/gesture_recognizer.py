@@ -100,15 +100,6 @@ class GestureRecognizer:
             if result:
                 return result
         
-        # Default to idle if we detected a person but no specific gesture
-        if pose_results.pose_landmarks:
-            return RecognitionResult(
-                action=ActionEnum.IDLE,
-                confidence=0.3,
-                timestamp=timestamp,
-                frame_number=self.frame_count,
-            )
-        
         return None
     
     def _recognize_hand_gesture(self, hand_results, timestamp: float) -> Optional[RecognitionResult]:
@@ -168,22 +159,28 @@ class GestureRecognizer:
     
     def _is_thumbs_up(self, hand_landmarks) -> bool:
         """Check if hand pose indicates thumbs up gesture."""
-        # Simplified check: thumb tip above other fingertips
-        thumb = hand_landmarks[4]  # Thumb tip
-        index = hand_landmarks[8]   # Index finger tip
-        
-        # Thumb should be above index finger
-        return thumb.y < index.y
+        try:
+            # Simplified check: thumb tip above other fingertips
+            thumb = hand_landmarks.landmark[4]  # Thumb tip
+            index = hand_landmarks.landmark[8]   # Index finger tip
+            
+            # Thumb should be above index finger
+            return thumb.y < index.y
+        except (AttributeError, IndexError, TypeError):
+            return False
     
     def _is_pointing(self, hand_landmarks) -> bool:
         """Check if hand pose indicates pointing gesture."""
-        # Simplified check: index finger extended, others closed
-        index = hand_landmarks[8]   # Index finger tip
-        middle = hand_landmarks[12] # Middle finger tip
-        ring = hand_landmarks[16]   # Ring finger tip
-        
-        # Index extended further than others
-        return index.y < middle.y and index.y < ring.y
+        try:
+            # Simplified check: index finger extended, others closed
+            index = hand_landmarks.landmark[8]   # Index finger tip
+            middle = hand_landmarks.landmark[12] # Middle finger tip
+            ring = hand_landmarks.landmark[16]   # Ring finger tip
+            
+            # Index extended further than others
+            return index.y < middle.y and index.y < ring.y
+        except (AttributeError, IndexError, TypeError):
+            return False
     
     def _is_waving(self, landmarks) -> bool:
         """Check if pose indicates waving gesture."""

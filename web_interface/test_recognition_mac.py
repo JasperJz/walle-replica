@@ -93,9 +93,15 @@ def main():
     # Flag to track if window has been created
     window_created = False
     last_stat_print = time.time()
+    quit_requested = False
     
     try:
-        while True:
+        while not quit_requested:
+            # Check if pipeline crashed
+            if not pipeline.is_running():
+                logger.error("Pipeline has stopped unexpectedly!")
+                break
+            
             # Get frame from camera (from the internal capture in pipeline)
             # We need to get frames from the camera directly to display them
             frame = camera.get_frame()
@@ -110,8 +116,16 @@ def main():
             
             # Add info overlay on the frame
             draw_text_on_frame(frame, f"Frames: {stats['frames_processed']}", (10, 30), color=(0, 255, 0))
-            draw_text_on_frame(frame, f"Gestures: {stats['gestures_recognized']}", (10, 60), color=(0, 255, 0))
-            draw_text_on_frame(frame, f"FPS: {stats['camera_fps']:.1f}", (10, 90), color=(0, 255, 0))
+            
+            # Display last recognized action or IDLE
+            if stats['last_action'] != 'None':
+                action_text = f"▶ {stats['last_action'].upper()} ({stats['last_confidence']:.0%})"
+                draw_text_on_frame(frame, action_text, (10, 60), color=(0, 200, 0), fontsize=0.9)
+            else:
+                draw_text_on_frame(frame, "▶ IDLE", (10, 60), color=(100, 100, 100), fontsize=0.9)
+            
+            draw_text_on_frame(frame, f"Total: {stats['gestures_recognized']} recognized", (10, 90), color=(0, 255, 0))
+            draw_text_on_frame(frame, f"FPS: {stats['camera_fps']:.1f}", (10, 120), color=(0, 255, 0))
             
             # Add status info
             status_color = (0, 255, 0) if stats['running'] else (0, 0, 255)
@@ -123,11 +137,11 @@ def main():
             cv2.imshow(window_name, frame)
             window_created = True
             
-            # Handle keyboard input
+            # Handle keyboard input with timeout
             key = cv2.waitKey(1) & 0xFF
             if key == ord('q'):
                 logger.info("\nQuit requested by user")
-                break
+                quit_requested = True
             elif key == ord('s'):
                 logger.info("\nPipeline Statistics:")
                 logger.info("-" * 50)
