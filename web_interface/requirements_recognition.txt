@@ -1,0 +1,10 @@
+# OpenCV for video processing and computer vision
+opencv-python==4.8.1.78
+
+# MediaPipe for pose and hand detection
+mediapipe==0.10.9
+
+# Note: The following are already in the main requirements
+# flask
+# python-serial
+# picamera2
