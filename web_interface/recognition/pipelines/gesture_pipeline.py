@@ -11,7 +11,7 @@ from collections import defaultdict, deque
 from threading import Event, Thread
 from typing import Callable, List, Optional
 
-from ..action_enum import RecognitionResult
+from ..action_enum import ActionEnum, RecognitionResult
 from ..cameras.base_camera import BaseCamera
 from ..debouncer import Debouncer
 from ..gesture_recognizer import GestureRecognizer
@@ -31,9 +31,10 @@ class ConfirmationWindow:
         """Add a classification result to the confirmation buffer."""
         self.frame_votes.append(result)
 
-    def get_confirmed_result(self) -> Optional[RecognitionResult]:
+    def get_confirmed_result(self, min_votes: Optional[int] = None) -> Optional[RecognitionResult]:
         """Return the dominant action once enough votes have accumulated."""
-        if len(self.frame_votes) < self.min_votes:
+        required_votes = self.min_votes if min_votes is None else min_votes
+        if len(self.frame_votes) < required_votes:
             return None
 
         vote_counts = defaultdict(int)
@@ -49,7 +50,7 @@ class ConfirmationWindow:
             return None
 
         action, count = max(vote_counts.items(), key=lambda item: item[1])
-        if count < self.min_votes:
+        if count < required_votes:
             return None
 
         average_confidence = confidence_sums[action] / count
@@ -116,8 +117,9 @@ class GesturePipeline:
         )
 
         self.idle_timeout = idle_timeout
-        self.confirm_timeout = 0.75
+        self.confirm_timeout = 0.5
         self.confirm_cancel_frames = 4
+        self._static_confirm_min_votes = max(2, confirmation_min_votes - 1)
         self.release_consecutive_frames = 4
         self.reconfirm_delay = max(0.4, debounce_cooldown)
 
@@ -268,7 +270,16 @@ class GesturePipeline:
         else:
             self._confirm_miss_frames += 1
 
-        confirmed_result = self.confirmation_window.get_confirmed_result()
+        min_votes = self.confirmation_window.min_votes
+        has_static_vote = any(
+            vote is not None
+            and (vote.metadata or {}).get("source") == "mp_gesture_recognizer"
+            for vote in self.confirmation_window.frame_votes
+        )
+        if has_static_vote:
+            min_votes = self._static_confirm_min_votes
+
+        confirmed_result = self.confirmation_window.get_confirmed_result(min_votes=min_votes)
         if confirmed_result is not None:
             self._emit_result(confirmed_result, current_time)
             self._enter_holding()
@@ -307,6 +318,18 @@ class GesturePipeline:
                     self.frame_count += 1
                     trigger_active, trigger_score = self.recognizer.detect_trigger(frame)
                     self._last_trigger_score = trigger_score
+
+                    if self._state == "idle":
+                        static_result = self.recognizer.recognize_static(frame)
+                        # Open palm uses the normal trigger path so wave can win in confirming.
+                        if (
+                            static_result is not None
+                            and static_result.action != ActionEnum.OPEN_PALM
+                        ):
+                            trigger_active = True
+                            self._enter_confirming(current_time)
+                            self._run_confirmation(frame, current_time, trigger_active)
+                            continue
 
                     if self._state == "idle" and trigger_active:
                         self._enter_confirming(current_time)

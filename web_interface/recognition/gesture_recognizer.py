@@ -93,6 +93,7 @@ class GestureRecognizer:
         self._prev_motion_frame: Optional[np.ndarray] = None
         self._prev_left_wrist_x: Optional[float] = None
         self._prev_right_wrist_x: Optional[float] = None
+        self._last_frame_motion_score = 0.0
         self._wave_history = {
             "left": deque(maxlen=12),
             "right": deque(maxlen=12),
@@ -135,6 +136,7 @@ class GestureRecognizer:
         so the pipeline can avoid full hand+pose recognition on every frame.
         """
         motion_score = self._estimate_frame_motion(frame)
+        self._last_frame_motion_score = motion_score
         pose_score = 0.0
 
         if self.pose is not None:
@@ -164,20 +166,19 @@ class GestureRecognizer:
         timestamp = time.time()
         rgb_frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
 
+        pose_results = self.pose.process(rgb_frame)
+        if pose_results.pose_landmarks:
+            result = self._recognize_pose_gesture(pose_results.pose_landmarks.landmark, timestamp)
+            if result:
+                return result
+
         static_result = self._recognize_static_gesture(frame, timestamp)
         if static_result is not None:
             return static_result
 
-        pose_results = self.pose.process(rgb_frame)
         hand_results = self.hands.process(rgb_frame)
-
         if hand_results.multi_hand_landmarks:
             result = self._recognize_hand_gesture(hand_results, timestamp)
-            if result:
-                return result
-
-        if pose_results.pose_landmarks:
-            result = self._recognize_pose_gesture(pose_results.pose_landmarks.landmark, timestamp)
             if result:
                 return result
 
@@ -221,6 +222,8 @@ class GestureRecognizer:
         action, score, category_name = best_match
         if score < self.confidence_threshold:
             return None
+        if action == ActionEnum.OPEN_PALM and self._is_active_wave_motion():
+            return None
 
         return RecognitionResult(
             action=action,
@@ -232,6 +235,16 @@ class GestureRecognizer:
                 "gesture_name": category_name,
             },
         )
+
+    def _is_active_wave_motion(self) -> bool:
+        """Return True only when wrist history shows a real back-and-forth wave."""
+        return self._has_wave_pattern(self._wave_history["left"]) or self._has_wave_pattern(
+            self._wave_history["right"]
+        )
+
+    def recognize_static(self, frame: np.ndarray) -> Optional[RecognitionResult]:
+        """Classify static hand gestures only (no pose / wave path)."""
+        return self._recognize_static_gesture(frame, time.time())
 
     def _estimate_frame_motion(self, frame: np.ndarray) -> float:
         """Estimate coarse upper-body motion using frame differencing."""
@@ -308,6 +321,7 @@ class GestureRecognizer:
                 confidence=0.8,
                 timestamp=timestamp,
                 frame_number=self.frame_count,
+                metadata={"source": "pose_wave"},
             )
 
         return None
@@ -395,8 +409,8 @@ class GestureRecognizer:
 
         return (
             direction_changes >= 1
-            or (strong_sweep and total_travel >= 0.10)
-        )
+            and amplitude >= 0.055
+        ) or (strong_sweep and total_travel >= 0.10)
 
     def _is_waving(self, landmarks) -> bool:
         """Check if pose indicates a real waving motion rather than just a raised arm."""
@@ -426,5 +440,6 @@ class GestureRecognizer:
         self._prev_motion_frame = None
         self._prev_left_wrist_x = None
         self._prev_right_wrist_x = None
+        self._last_frame_motion_score = 0.0
         for history in self._wave_history.values():
             history.clear()
