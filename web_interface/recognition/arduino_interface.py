@@ -25,8 +25,9 @@ class ArduinoInterface:
     ACTION_COMMANDS = {
         ActionEnum.WAVE: "x",
         ActionEnum.THUMBS_UP: "u",
+        ActionEnum.THUMBS_DOWN: "d",
         ActionEnum.OPEN_PALM: "p",
-        ActionEnum.TOUCH: "t",
+        ActionEnum.Closed_Fist: "f",
         ActionEnum.IDLE: " ",  # Space for idle
     }
     

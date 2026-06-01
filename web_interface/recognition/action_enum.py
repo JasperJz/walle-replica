@@ -14,6 +14,7 @@ class ActionEnum(str, Enum):
     
     WAVE = "wave"
     THUMBS_UP = "thumbs_up"
+    THUMBS_DOWN = "thumbs_down"
     OPEN_PALM = "open_palm"
     IDLE = "idle"
     Closed_Fist = "closed_fist"

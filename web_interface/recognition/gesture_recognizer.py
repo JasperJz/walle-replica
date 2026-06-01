@@ -42,6 +42,7 @@ class GestureRecognizer:
 
     STATIC_GESTURE_MAP = {
         "Thumb_Up": ActionEnum.THUMBS_UP,
+        "Thumb_Down": ActionEnum.THUMBS_DOWN,
         "Open_Palm": ActionEnum.OPEN_PALM,
         "Closed_Fist": ActionEnum.Closed_Fist,
     }
