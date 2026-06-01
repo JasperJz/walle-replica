@@ -14,10 +14,9 @@ import cv2
 import logging
 import sys
 import time
-from threading import Thread, Event
 from recognition.cameras.mock_camera import MockCamera
 from recognition.pipelines.gesture_pipeline import GesturePipeline
-from recognition.action_enum import RecognitionResult, ActionEnum
+from recognition.action_enum import RecognitionResult
 
 # Set up logging
 logging.basicConfig(
@@ -29,7 +28,7 @@ logger = logging.getLogger(__name__)
 
 def on_gesture_recognized(result: RecognitionResult) -> None:
     """Callback when gesture is recognized."""
-    logger.info(f"✓ GESTURE RECOGNIZED: {result.action.value} (confidence: {result.confidence:.2f})")
+    logger.info(f"✓ GESTURE RECOGNIZED: {result.action.value} (vote: {result.confidence:.2f})")
 
 
 def draw_text_on_frame(frame, text: str, position=(10, 30), color=(0, 255, 0), fontsize=0.7):
@@ -61,6 +60,9 @@ def main():
         camera=camera,
         confidence_threshold=0.5,
         debounce_cooldown=1.0,
+        voting_window_size=5,
+        voting_threshold=0.6,
+        idle_timeout=1.0,
     )
     
     # Register callback
@@ -90,7 +92,6 @@ def main():
     
     # Flag to track if window has been created
     window_created = False
-    last_stat_print = time.time()
     quit_requested = False
     
     try:
@@ -112,23 +113,13 @@ def main():
             # Get pipeline stats
             stats = pipeline.get_stats()
             
-            # Add info overlay on the frame
-            draw_text_on_frame(frame, f"Frames: {stats['frames_processed']}", (10, 30), color=(0, 255, 0))
-            
-            # Display last recognized action or IDLE
-            if stats['last_action'] != 'None':
-                action_text = f"▶ {stats['last_action'].upper()} ({stats['last_confidence']:.0%})"
-                draw_text_on_frame(frame, action_text, (10, 60), color=(0, 200, 0), fontsize=0.9)
+            # Keep the preview UI focused on the current gesture only.
+            if stats['last_action'] != 'idle':
+                action_text = f"Gesture: {stats['last_action'].upper()} (vote {stats['last_confidence']:.0%})"
+                draw_text_on_frame(frame, action_text, (10, 35), color=(0, 200, 0), fontsize=0.9)
             else:
-                draw_text_on_frame(frame, "▶ IDLE", (10, 60), color=(100, 100, 100), fontsize=0.9)
-            
-            draw_text_on_frame(frame, f"Total: {stats['gestures_recognized']} recognized", (10, 90), color=(0, 255, 0))
-            draw_text_on_frame(frame, f"FPS: {stats['camera_fps']:.1f}", (10, 120), color=(0, 255, 0))
-            
-            # Add status info
-            status_color = (0, 255, 0) if stats['running'] else (0, 0, 255)
-            status_text = "● RUNNING" if stats['running'] else "● STOPPED"
-            draw_text_on_frame(frame, status_text, (10, frame.shape[0] - 20), color=status_color)
+                draw_text_on_frame(frame, "Gesture: IDLE", (10, 35), color=(100, 100, 100), fontsize=0.9)
+            draw_text_on_frame(frame, f"FPS: {stats['camera_fps']:.1f}", (10, 70), color=(0, 255, 0))
             
             # Display frame
             window_name = "Gesture Recognition - Mac Test"
@@ -146,7 +137,6 @@ def main():
                 for stat_key, value in stats.items():
                     logger.info(f"  {stat_key}: {value}")
                 logger.info("-" * 50)
-                last_stat_print = time.time()
     
     except KeyboardInterrupt:
         logger.info("\nInterrupted by user (Ctrl+C)")
@@ -174,7 +164,7 @@ def main():
         logger.info(f"  Total frames processed: {final_stats['frames_processed']}")
         logger.info(f"  Total gestures recognized: {final_stats['gestures_recognized']}")
         if final_stats['frames_processed'] > 0:
-            logger.info(f"  Recognition rate: {final_stats['avg_recognition_rate']*100:.2f}%")
+            logger.info(f"  Recognition rate: {final_stats['recognition_rate']:.2f} gestures/sec")
         logger.info("=" * 70)
         logger.info("Thank you for testing! Goodbye! 👋")
     
