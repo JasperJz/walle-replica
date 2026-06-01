@@ -84,6 +84,7 @@ def main():
     logger.info("📹 Camera is now active - show your gestures to the camera!")
     logger.info("   - WAVE: Raise your arm and move it side to side")
     logger.info("   - THUMBS UP: Show thumbs up gesture")
+    logger.info("   - OPEN PALM: Show an open palm to the camera")
     logger.info("-" * 70)
     logger.info("Controls:")
     logger.info("  'q' - Quit the program")
@@ -115,7 +116,8 @@ def main():
             
             # Keep the preview UI focused on the current gesture only.
             if stats['last_action'] != 'idle':
-                action_text = f"Gesture: {stats['last_action'].upper()} (vote {stats['last_confidence']:.0%})"
+                display_action = stats['last_action'].replace('_', ' ').upper()
+                action_text = f"Gesture: {display_action} (vote {stats['last_confidence']:.0%})"
                 draw_text_on_frame(frame, action_text, (10, 35), color=(0, 200, 0), fontsize=0.9)
             else:
                 draw_text_on_frame(frame, "Gesture: IDLE", (10, 35), color=(100, 100, 100), fontsize=0.9)

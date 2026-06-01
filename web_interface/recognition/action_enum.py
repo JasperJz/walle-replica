@@ -13,9 +13,10 @@ class ActionEnum(str, Enum):
     """Enumeration of robot actions that can be recognized from gestures."""
     
     WAVE = "wave"
-    TOUCH = "touch"
-    IDLE = "idle"
     THUMBS_UP = "thumbs_up"
+    OPEN_PALM = "open_palm"
+    IDLE = "idle"
+    Closed_Fist = "closed_fist"
 
 
 @dataclass

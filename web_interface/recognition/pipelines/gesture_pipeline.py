@@ -87,6 +87,7 @@ class GesturePipeline:
         voting_window_size: int = 5,
         voting_threshold: float = 0.6,
         idle_timeout: float = 1.0,
+        gesture_model_path: Optional[str] = None,
     ):
         """
         Initialize the gesture pipeline.
@@ -98,9 +99,13 @@ class GesturePipeline:
             voting_window_size: Number of frames used during confirmation
             voting_threshold: Proportion of confirmation frames needed to trigger
             idle_timeout: Maximum time to keep a latched gesture active
+            gesture_model_path: Optional path to a MediaPipe gesture recognizer task model
         """
         self.camera = camera
-        self.recognizer = GestureRecognizer(confidence_threshold)
+        self.recognizer = GestureRecognizer(
+            confidence_threshold=confidence_threshold,
+            gesture_model_path=gesture_model_path,
+        )
         self.debouncer = Debouncer(default_cooldown=debounce_cooldown)
         self.debounce_cooldown = debounce_cooldown
 

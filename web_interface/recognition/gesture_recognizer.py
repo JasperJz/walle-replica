@@ -7,6 +7,7 @@ This module detects human poses and gestures from video frames.
 import logging
 import time
 from collections import deque
+from pathlib import Path
 from typing import Optional, Tuple
 
 import cv2
@@ -14,9 +15,14 @@ import numpy as np
 
 try:
     import mediapipe as mp
+    from mediapipe.tasks import python as mp_python
+    from mediapipe.tasks.python import vision as mp_vision
 
     MEDIAPIPE_AVAILABLE = True
 except ImportError:
+    mp = None
+    mp_python = None
+    mp_vision = None
     MEDIAPIPE_AVAILABLE = False
 
 from .action_enum import ActionEnum, RecognitionResult
@@ -34,12 +40,23 @@ class GestureRecognizer:
     2. `process_frame()` for full gesture classification.
     """
 
-    def __init__(self, confidence_threshold: float = 0.5):
+    STATIC_GESTURE_MAP = {
+        "Thumb_Up": ActionEnum.THUMBS_UP,
+        "Open_Palm": ActionEnum.OPEN_PALM,
+        "Closed_Fist": ActionEnum.Closed_Fist,
+    }
+
+    def __init__(
+        self,
+        confidence_threshold: float = 0.5,
+        gesture_model_path: Optional[str] = None,
+    ):
         """
         Initialize the gesture recognizer.
 
         Args:
             confidence_threshold: Minimum confidence score for gesture recognition
+            gesture_model_path: Optional MediaPipe gesture recognizer task model
         """
         if not MEDIAPIPE_AVAILABLE:
             logger.warning("MediaPipe not available. Install with: pip install mediapipe")
@@ -47,6 +64,7 @@ class GestureRecognizer:
             self.mp_hands = None
             self.pose = None
             self.hands = None
+            self.gesture_classifier = None
         else:
             self.mp_pose = mp.solutions.pose
             self.mp_hands = mp.solutions.hands
@@ -59,9 +77,12 @@ class GestureRecognizer:
             )
             self.hands = self.mp_hands.Hands(
                 static_image_mode=False,
-                max_num_hands=2,
+                max_num_hands=1,
                 min_detection_confidence=confidence_threshold,
                 min_tracking_confidence=confidence_threshold,
+            )
+            self.gesture_classifier = self._create_gesture_classifier(
+                gesture_model_path, confidence_threshold
             )
 
         self.confidence_threshold = confidence_threshold
@@ -75,6 +96,35 @@ class GestureRecognizer:
             "left": deque(maxlen=12),
             "right": deque(maxlen=12),
         }
+
+    def _create_gesture_classifier(
+        self, gesture_model_path: Optional[str], confidence_threshold: float
+    ):
+        """Create the MediaPipe task-based static gesture classifier if a model is available."""
+        model_path = Path(gesture_model_path) if gesture_model_path else (
+            Path(__file__).resolve().parent / "models" / "gesture_recognizer.task"
+        )
+
+        if not model_path.exists():
+            logger.warning(
+                "Gesture recognizer model not found at %s, falling back to rule-based hands",
+                model_path,
+            )
+            return None
+
+        try:
+            options = mp_vision.GestureRecognizerOptions(
+                base_options=mp_python.BaseOptions(model_asset_path=str(model_path)),
+                num_hands=1,
+                min_hand_detection_confidence=max(0.6, confidence_threshold),
+                min_hand_presence_confidence=max(0.6, confidence_threshold),
+                min_tracking_confidence=max(0.5, confidence_threshold),
+            )
+            logger.info("Loaded MediaPipe gesture recognizer model from %s", model_path)
+            return mp_vision.GestureRecognizer.create_from_options(options)
+        except Exception as exc:
+            logger.warning("Failed to initialize gesture recognizer model: %s", exc)
+            return None
 
     def detect_trigger(self, frame: np.ndarray) -> Tuple[bool, float]:
         """
@@ -113,6 +163,10 @@ class GestureRecognizer:
         timestamp = time.time()
         rgb_frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
 
+        static_result = self._recognize_static_gesture(frame, timestamp)
+        if static_result is not None:
+            return static_result
+
         pose_results = self.pose.process(rgb_frame)
         hand_results = self.hands.process(rgb_frame)
 
@@ -127,6 +181,56 @@ class GestureRecognizer:
                 return result
 
         return None
+
+    def _recognize_static_gesture(
+        self, frame: np.ndarray, timestamp: float
+    ) -> Optional[RecognitionResult]:
+        """Use MediaPipe's built-in classifier for static hand gestures when available."""
+        if self.gesture_classifier is None:
+            return None
+
+        height, width = frame.shape[:2]
+        if width > 480:
+            scale = 480.0 / float(width)
+            resized = cv2.resize(frame, (480, max(1, int(height * scale))))
+        else:
+            resized = frame
+
+        rgb_frame = cv2.cvtColor(resized, cv2.COLOR_BGR2RGB)
+        mp_image = mp.Image(image_format=mp.ImageFormat.SRGB, data=rgb_frame)
+
+        try:
+            gesture_result = self.gesture_classifier.recognize(mp_image)
+        except Exception as exc:
+            logger.warning("Static gesture classification failed: %s", exc)
+            return None
+
+        best_match = None
+        for gesture_candidates in gesture_result.gestures:
+            for candidate in gesture_candidates:
+                action = self.STATIC_GESTURE_MAP.get(candidate.category_name)
+                if action is None:
+                    continue
+                if best_match is None or candidate.score > best_match[1]:
+                    best_match = (action, candidate.score, candidate.category_name)
+
+        if best_match is None:
+            return None
+
+        action, score, category_name = best_match
+        if score < self.confidence_threshold:
+            return None
+
+        return RecognitionResult(
+            action=action,
+            confidence=float(score),
+            timestamp=timestamp,
+            frame_number=self.frame_count,
+            metadata={
+                "source": "mp_gesture_recognizer",
+                "gesture_name": category_name,
+            },
+        )
 
     def _estimate_frame_motion(self, frame: np.ndarray) -> float:
         """Estimate coarse upper-body motion using frame differencing."""
