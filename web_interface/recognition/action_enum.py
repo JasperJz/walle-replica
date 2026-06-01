@@ -15,11 +15,7 @@ class ActionEnum(str, Enum):
     WAVE = "wave"
     TOUCH = "touch"
     IDLE = "idle"
-    WAVE_LEFT = "wave_left"
-    WAVE_RIGHT = "wave_right"
-    POINT = "point"
     THUMBS_UP = "thumbs_up"
-    CLAP = "clap"
 
 
 @dataclass

@@ -24,12 +24,8 @@ class ArduinoInterface:
     # Mapping from ActionEnum to Arduino command character
     ACTION_COMMANDS = {
         ActionEnum.WAVE: "x",
-        ActionEnum.WAVE_LEFT: "y",
-        ActionEnum.WAVE_RIGHT: "z",
         ActionEnum.TOUCH: "t",
         ActionEnum.THUMBS_UP: "u",
-        ActionEnum.CLAP: "c",
-        ActionEnum.POINT: "p",
         ActionEnum.IDLE: " ",  # Space for idle
     }
     

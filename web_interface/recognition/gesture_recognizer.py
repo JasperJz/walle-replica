@@ -121,15 +121,6 @@ class GestureRecognizer:
                     timestamp=timestamp,
                     frame_number=self.frame_count,
                 )
-            
-            # Pointing: index finger extended
-            if self._is_pointing(hand_landmarks):
-                return RecognitionResult(
-                    action=ActionEnum.POINT,
-                    confidence=0.6,
-                    timestamp=timestamp,
-                    frame_number=self.frame_count,
-                )
         
         return None
     
@@ -142,15 +133,6 @@ class GestureRecognizer:
             return RecognitionResult(
                 action=ActionEnum.WAVE,
                 confidence=0.65,
-                timestamp=timestamp,
-                frame_number=self.frame_count,
-            )
-        
-        # Clap detection: both hands coming together
-        if self._is_clapping(landmarks):
-            return RecognitionResult(
-                action=ActionEnum.CLAP,
-                confidence=0.6,
                 timestamp=timestamp,
                 frame_number=self.frame_count,
             )
@@ -171,18 +153,14 @@ class GestureRecognizer:
     
     def _is_pointing(self, hand_landmarks) -> bool:
         """Check if hand pose indicates pointing gesture."""
-        try:
-            # Simplified check: index finger extended, others closed
-            index = hand_landmarks.landmark[8]   # Index finger tip
-            middle = hand_landmarks.landmark[12] # Middle finger tip
-            ring = hand_landmarks.landmark[16]   # Ring finger tip
-            
-            # Index extended further than others
-            return index.y < middle.y and index.y < ring.y
-        except (AttributeError, IndexError, TypeError):
-            return False
+        # This gesture has been removed to improve accuracy
+        return False
     
-    def _is_waving(self, landmarks) -> bool:
+    def _is_clapping(self, landmarks) -> bool:
+        """Check if pose indicates clapping gesture."""
+        # This gesture has been removed to improve accuracy
+        return False
+    
         """Check if pose indicates waving gesture."""
         # Check if one arm is raised (shoulder, elbow, wrist)
         # Shoulders
@@ -210,17 +188,34 @@ class GestureRecognizer:
     
     def _is_clapping(self, landmarks) -> bool:
         """Check if pose indicates clapping gesture."""
-        # Simplified: both wrists close to each other at face level
+        # This gesture has been removed to improve accuracy
+        return False
+    
+    def _is_waving(self, landmarks) -> bool:
+        """Check if pose indicates waving gesture."""
+        # Check if one arm is raised (shoulder, elbow, wrist)
+        # Shoulders
+        left_shoulder = landmarks[11]
+        right_shoulder = landmarks[12]
+        
+        # Elbows
+        left_elbow = landmarks[13]
+        right_elbow = landmarks[14]
+        
+        # Wrists
         left_wrist = landmarks[15]
         right_wrist = landmarks[16]
-        nose = landmarks[0]
         
-        # Wrists close together horizontally and near face level
-        wrist_distance = abs(left_wrist.x - right_wrist.x)
-        wrists_at_face = (left_wrist.y < nose.y and right_wrist.y < nose.y)
-        wrists_close = wrist_distance < 0.1
+        # Check if either arm is raised (wrist above shoulder)
+        left_arm_raised = (left_wrist.y < left_shoulder.y and 
+                          left_elbow.visibility > 0.5 and
+                          left_wrist.visibility > 0.5)
         
-        return wrists_close and wrists_at_face
+        right_arm_raised = (right_wrist.y < right_shoulder.y and
+                           right_elbow.visibility > 0.5 and
+                           right_wrist.visibility > 0.5)
+        
+        return left_arm_raised or right_arm_raised
     
     def get_frame_count(self) -> int:
         """Get total number of frames processed."""

@@ -81,8 +81,6 @@ def main():
     logger.info("-" * 70)
     logger.info("📹 Camera is now active - show your gestures to the camera!")
     logger.info("   - WAVE: Raise your arm and move it side to side")
-    logger.info("   - CLAP: Bring your hands together")
-    logger.info("   - POINT: Extend one arm with index finger pointing")
     logger.info("   - THUMBS UP: Show thumbs up gesture")
     logger.info("-" * 70)
     logger.info("Controls:")
