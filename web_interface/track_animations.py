@@ -135,7 +135,7 @@ class TrackAnimator:
             self._burst('a', t); self._send('q')
             self._burst('d', t * 2); self._send('q')
             self._burst('a', t); self._send('q')
-       self._sleep(0.1)
+        self._sleep(0.1)
         self._burst('d', TURN_360); self._send('q')   # 旋转一整圈
 
     def backup(self):
