@@ -37,7 +37,15 @@ BACK_BIAS = 1.4    # 后退时长乘数。传动效率低就放大后退时间�
 GAP = 0.25         # 动作之间的标准过渡间隙(秒)。
                    #   电机刚停有惯性, 间隙太小下个动作会被吃掉。
 TURN_GAP = 0.3     # 转弯后额外停顿(秒), 比直线间隙更大。
-TURN_90 = 0.9      # 约 90 度转弯所需秒数, 实地微调。
+
+# --- 转弯基准(秒) ---
+# 你的机器人实测: 1.2 秒约转 90 度。所有转弯动画从这里推导。
+# 【调法】在网页上点 "Turn Right", 看转了多少度——不到 90 就调大,
+#   超过就调小, 一次加减 0.2。调准这一个, spin/figure8/patrol 全对。
+TURN_90  = 1.2     # 90 度转弯所需秒数, 实地微调。
+TURN_180 = TURN_90 * 2   # 180 度(转身)
+TURN_270 = TURN_90 * 3   # 270 度
+TURN_360 = TURN_90 * 4   # 360 度(整圈)
 
 
 # ==================== TrackAnimator 类 ====================
@@ -127,13 +135,13 @@ class TrackAnimator:
             self._burst('a', t); self._send('q')
             self._burst('d', t * 2); self._send('q')
             self._burst('a', t); self._send('q')
-        self._sleep(0.1)
-        self._burst('d', 1.2); self._send('q')   # 旋转一周
+       self._sleep(0.1)
+        self._burst('d', TURN_360); self._send('q')   # 旋转一整圈
 
     def backup(self):
         """后退 + 转身离开。"""
         self._back(0.8); self._send('q'); self._sleep(GAP)
-        self._burst('d', TURN_90 * 2); self._send('q'); self._sleep(TURN_GAP)
+        self._burst('d', TURN_180); self._send('q'); self._sleep(TURN_GAP)
         self._burst('w', 0.8); self._send('q')
 
     def dance(self):
@@ -141,37 +149,37 @@ class TrackAnimator:
         for t in [0.5, 0.35, 0.25]:
             if self._stop.is_set(): return
             self._burst('w', t); self._send('q'); self._sleep(0.12)
-            self._burst('d', t); self._send('q'); self._sleep(0.12)
+            self._burst('d', t * (TURN_90 / 0.8)); self._send('q'); self._sleep(0.12)
             self._back(t); self._send('q'); self._sleep(0.12)
-            self._burst('a', t); self._send('q'); self._sleep(0.12)
+            self._burst('a', t * (TURN_90 / 0.8)); self._send('q'); self._sleep(0.12)
             self._sleep(0.1)
 
     def figure8(self):
         """画 8 字: 右转一圈 + 前进 + 左转一圈 + 前进。"""
         self._burst('w', 0.6); self._send('q'); self._sleep(GAP)
-        self._burst('d', 2.4); self._send('q'); self._sleep(TURN_GAP)
+        self._burst('d', TURN_360); self._send('q'); self._sleep(TURN_GAP)
         self._burst('w', 0.8); self._send('q'); self._sleep(GAP)
-        self._burst('a', 2.4); self._send('q'); self._sleep(TURN_GAP)
+        self._burst('a', TURN_360); self._send('q'); self._sleep(TURN_GAP)
         self._burst('w', 0.6); self._send('q')
 
     def zigzag(self):
         """蛇形前进: 左转前进右转前进, 重复 4 段。"""
         for _ in range(4):
             if self._stop.is_set(): return
-            self._burst('a', 0.4); self._send('q'); self._sleep(0.15)
+            self._burst('a', TURN_90 * 0.4); self._send('q'); self._sleep(0.15)
             self._burst('w', 0.8); self._send('q'); self._sleep(0.15)
-            self._burst('d', 0.8); self._send('q'); self._sleep(0.15)
+            self._burst('d', TURN_90 * 0.8); self._send('q'); self._sleep(0.15)
             self._burst('w', 0.8); self._send('q'); self._sleep(0.15)
 
     def celebrate(self):
         """庆祝: 冲刺 -> 旋转两周 -> 摇摆 -> 胜利前进。"""
         self._burst('w', 0.4); self._send('q'); self._sleep(GAP)
-        self._burst('d', 1.0); self._send('q'); self._sleep(TURN_GAP)
-        self._burst('a', 2.0); self._send('q'); self._sleep(TURN_GAP)
+        self._burst('d', TURN_360); self._send('q'); self._sleep(TURN_GAP)
+        self._burst('a', TURN_360); self._send('q'); self._sleep(TURN_GAP)
         self.wiggle()
         self._sleep(GAP)
         self._burst('w', 1.0); self._send('q'); self._sleep(GAP)
-        self._burst('d', 0.8); self._send('q'); self._sleep(TURN_GAP)
+        self._burst('d', TURN_180); self._send('q'); self._sleep(TURN_GAP)
         self._burst('w', 0.8); self._send('q')
 
     def wander(self):
@@ -188,13 +196,20 @@ class TrackAnimator:
             self._sleep(random.uniform(0.2, 0.45))
 
     def spin(self):
-        """原地旋转: 先右转 2 圈再左转 2 圈。"""
-        for _ in range(2):
+        """原地旋转: 右转一整圈再左转一整圈。"""
+        self._burst('d', TURN_360); self._send('q'); self._sleep(TURN_GAP)
+        self._burst('a', TURN_360); self._send('q'); self._sleep(TURN_GAP)
+        self._burst('d', TURN_360); self._send('q'); self._sleep(TURN_GAP)
+        self._burst('a', TURN_360); self._send('q')
+
+    def spin8(self):
+        """连续旋转: 同方向转 8 圈(4 右 + 4 左)。"""
+        for _ in range(4):
             if self._stop.is_set(): return
-            self._burst('d', 1.2); self._send('q'); self._sleep(TURN_GAP)
-        for _ in range(2):
+            self._burst('d', TURN_360); self._send('q'); self._sleep(TURN_GAP)
+        for _ in range(4):
             if self._stop.is_set(): return
-            self._burst('a', 1.2); self._send('q'); self._sleep(TURN_GAP)
+            self._burst('a', TURN_360); self._send('q'); self._sleep(TURN_GAP)
 
     def waltz(self):
         """华尔兹三拍: 前进-右转-左转, 优雅慢速, 4 小节。"""
@@ -209,11 +224,11 @@ class TrackAnimator:
         for _ in range(3):
             if self._stop.is_set(): return
             self._pulse('w', 1.5, on=0.2, off=0.1); self._send('q'); self._sleep(GAP)
-            self._burst('a', 0.6); self._send('q'); self._sleep(TURN_GAP)
-            self._burst('d', 1.2); self._send('q'); self._sleep(TURN_GAP)
-            self._burst('a', 0.6); self._send('q'); self._sleep(GAP)
+            self._burst('a', TURN_90 * 0.5); self._send('q'); self._sleep(TURN_GAP)
+            self._burst('d', TURN_90); self._send('q'); self._sleep(TURN_GAP)
+            self._burst('a', TURN_90 * 0.5); self._send('q'); self._sleep(GAP)
             turn = random.choice(['a', 'd'])
-            self._burst(turn, random.uniform(0.3, 0.8)); self._send('q'); self._sleep(TURN_GAP)
+            self._burst(turn, random.uniform(TURN_90 * 0.25, TURN_90 * 0.7)); self._send('q'); self._sleep(TURN_GAP)
 
     def panic(self):
         """慌张: 快速短促不规则运动, 像受惊乱跑。"""
@@ -282,10 +297,10 @@ class TrackAnimator:
         self._back(1.0); self._send('q')
 
     def left(self):
-        self._burst('a', 0.8); self._send('q')
+        self._burst('a', TURN_90); self._send('q')
 
     def right(self):
-        self._burst('d', 0.8); self._send('q')
+        self._burst('d', TURN_90); self._send('q')
 
     # ---------------- 公共 API ----------------
 
@@ -307,6 +322,7 @@ class TrackAnimator:
         'waltz':    'waltz',
         'celebrate':'celebrate',
         'spin':     'spin',
+        'spin8':    'spin8',
         'explore':  'explore',
         'wander':   'wander',
         'tease':    'tease',
