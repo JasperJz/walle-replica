@@ -121,6 +121,17 @@ int turnValue = 0;
 int turnOffset = 0;
 int motorDeadzone = 0;
 
+/// 履带独立配平 (百分比 0~100)
+// -- -- -- -- -- -- -- -- -- -- -- -- -- --
+// 两条履带/电机难免有差异(摩擦、电机个体差),导致直行跑偏。
+// 这里给每条履带单独乘一个系数:
+//   100 = 满速不补偿(原版行为);调小 = 把偏快的履带压慢。
+// 调法: 抬起机器人或放地上跑 "forward",看哪边偏快,就把那边调小,
+//        一次减 5 左右,直到两边转速一致 / 直行不偏。
+// 例: 右边履带偏快 -> MOTOR_TRIM_R 调到 90,再慢慢试。
+#define MOTOR_TRIM_L 100   // 左履带速度系数(%)
+#define MOTOR_TRIM_R 100   // 右履带速度系数(%)
+
 
 /// Runtime Variables
 // -- -- -- -- -- -- -- -- -- -- -- -- -- --
@@ -621,8 +632,9 @@ void manageMotors(float dt) {
 	}
 
 	// Update motor speeds
-	motorL.setSpeed(curvel[NUMBER_OF_SERVOS]);
-	motorR.setSpeed(curvel[NUMBER_OF_SERVOS+1]);
+	// 履带独立配平: 按 MOTOR_TRIM_L/R 系数缩放,让两边转速一致
+	motorL.setSpeed(int(curvel[NUMBER_OF_SERVOS]     * (MOTOR_TRIM_L / 100.0)));
+	motorR.setSpeed(int(curvel[NUMBER_OF_SERVOS + 1] * (MOTOR_TRIM_R / 100.0)));
 }
 
 
