@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 #############################################
 # Wall-e Robot Web-interface
 #
@@ -16,15 +18,58 @@ import os
 import sys
 from queue import Queue
 from threading import Event, Thread
-from serial import Serial
-import serial.tools.list_ports
+try:
+    from serial import Serial
+    import serial.tools.list_ports
+except ImportError:
+    # Mac 本地测试没有 pyserial —— 用空占位, 网页仍能跑
+    Serial = None
+    class _ListPortsMock:
+        comports = staticmethod(lambda: [])
+    serial = _ListPortsMock()
 import subprocess
 import time
 import tempfile
-from picamera2_stream import PiCameraStreamer
+# try:
+#     from picamera2_stream import PiCameraStreamer
+# except ImportError:
+#     # Mac 本地测试没有 Pi 摄像头模块
+#     class PiCameraStreamer:
+#         def __init__(self): pass
+#         def is_stream_active(self): return False
+#         def start_stream(self): return False, "Camera not available"
+#         def stop_stream(self): return True
+class PiCameraStreamer:
+    """摄像头流。Pi 上用真的, Mac 上用 Mock。"""
+    def __init__(self):
+        self._active = False
+        try:
+            from picamera2_stream import PiCameraStreamer as _Real
+            self._real = _Real()
+        except (ImportError, Exception):
+            self._real = None
+    def is_stream_active(self):
+        return self._real.is_stream_active() if self._real else False
+    def start_stream(self):
+        if self._real:
+            r, e = self._real.start_stream()
+            self._active = r
+            return r, e
+        return False, "Camera not available on this platform"
+    def stop_stream(self):
+        if self._real:
+            self._active = False
+            return self._real.stop_stream()
+        self._active = False
+        return True
 import logging
-from waitress import serve
+try:
+    from waitress import serve
+except ImportError:
+    serve = None
 
+
+from track_animations import TrackAnimator
 
 app = Flask(__name__)
 
@@ -239,6 +284,8 @@ class ArduinoDevice:
 
 
 arduino: ArduinoDevice = ArduinoDevice()
+
+track_animator: TrackAnimator = TrackAnimator(arduino)
 
 
 ###############################################################
@@ -611,6 +658,42 @@ def animate():
     else:
         return jsonify({'status': 'Error', 'msg': 'Unable to read POST data'})
 
+# =============================================================
+@app.route('/track', methods=['POST'])
+def track():
+    """
+    履带动画: 在后台线程编排 w/s/a/d 序列
+    :return: JSON 响应
+    """
+    if not session.get('active'):
+        return redirect(url_for('login'))
+
+    name = request.form.get('name')
+
+    if name is not None:
+        logger.debug(f"Track: {name}")
+
+        if track_animator.play(name):
+            return jsonify({'status': 'OK'})
+        else:
+            return jsonify({'status': 'Error', 'msg': 'Animation not found or Arduino not connected'})
+    else:
+        return jsonify({'status': 'Error', 'msg': 'Unable to read POST data'})
+
+
+# =============================================================
+@app.route('/track/stop', methods=['POST'])
+def track_stop():
+    """
+    停止当前履带动画
+    :return: JSON 响应
+    """
+    if not session.get('active'):
+        return redirect(url_for('login'))
+
+    track_animator.stop()
+    return jsonify({'status': 'OK'})
+
 
 # =============================================================
 @app.route('/servoControl', methods=['POST'])
@@ -754,4 +837,8 @@ if __name__ == '__main__':
     
     # Production mode
     else:
-        serve(app, host='0.0.0.0', port=app.config['APP_PORT'])
+        if serve is not None:
+            serve(app, host='0.0.0.0', port=app.config['APP_PORT'])
+        else:
+            # Mac 本地测试无 waitress —— 回退到 Flask 开发服务器
+            app.run(port=app.config['APP_PORT'], host='0.0.0.0', debug=True)

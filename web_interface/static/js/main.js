@@ -259,6 +259,53 @@ function anime(clip, time) {
 
 
 /*
+ * Play a track (caterpillar) animation
+ */
+function trackAnim(name) {
+	$.ajax({
+		url: "/track",
+		type: "POST",
+		data: {"name": name},
+		dataType: "json",
+		beforeSend: function(){
+			$('#anime-progress').stop();
+			$('#anime-progress').removeClass('bg-danger');
+			$('#anime-progress').css("width", "0%").attr("aria-valuenow", 0);
+		},
+		success: function(data){
+			if(data.status == "Error"){
+				$('#anime-progress').addClass('bg-danger');
+				$('#anime-progress').css("width", "0%").animate({width: 100+"%"}, 500);
+				showAlert(1, 'Error!', data.msg, 1);
+			} else {
+				$('#anime-progress').css("width", "0%").animate({width: 100+"%"}, 10000);
+			}
+		},
+		error: function() {
+			$('#anime-progress').addClass('bg-danger');
+			$('#anime-progress').css("width", "0%").animate({width: 100+"%"}, 500);
+			showAlert(1, 'Error!', 'Unable to start animation.', 1);
+		}
+	});
+}
+
+/*
+ * Stop the current track animation
+ */
+function trackStop() {
+	$.ajax({
+		url: "/track/stop",
+		type: "POST",
+		data: {},
+		dataType: "json",
+		success: function(data){
+			$('#anime-progress').stop();
+			$('#anime-progress').css("width", "0%").attr("aria-valuenow", 0);
+		}
+	});
+}
+
+/*
  * Play an audio clip
  */
 function playAudio(clip, time) {
