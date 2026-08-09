@@ -232,38 +232,104 @@ class ArduinoDevice:
     # ---------------------------------------------------------
     def __communication_thread(self):
         """
-        Handle sending and receiving data with the serial device
+        Handle sending and receiving data with the serial device.
+        Auto-reconnects if the serial port drops (USB power glitch etc).
         """
         dataString: str = ""
         logger.info(f'Starting Arduino Thread ({self.port_name})')
 
-        # Keep this thread running until the exit_flag changes
         while not self.exit_flag.is_set():
             try:
+                # Check if serial port is still alive; if not, attempt reconnection
+                if self.serial_port is None or not self.serial_port.is_open:
+                    logger.warning('Serial port lost, attempting reconnection...')
+                    reconnect_attempts = 0
+                    while not self.exit_flag.is_set():
+                        if self.__reconnect_serial():
+                            break
+                        reconnect_attempts += 1
+                        if reconnect_attempts == 1:
+                            logger.warning('Reconnect failed, will keep retrying every 2s')
+                        self._sleep_check(2.0)
+                    continue
+
                 # If there are any messages in the queue, send them
                 if not self.queue.empty():
                     data = self.queue.get() + '\n'
                     self.serial_port.write(data.encode())
 
-                # Read any incomming messages
-                while (self.serial_port.in_waiting > 0):
-                    data = self.serial_port.read()
-                    if (data.decode() == '\n' or data.decode() == '\r'):
-                        self.__parse_message(dataString)
-                        dataString = ""
-                    else:
-                        dataString += data.decode()
+                # Read any incoming messages
+                if self.serial_port.in_waiting > 0:
+                    while (self.serial_port.in_waiting > 0):
+                        data = self.serial_port.read()
+                        if (data.decode() == '\n' or data.decode() == '\r'):
+                            self.__parse_message(dataString)
+                            dataString = ""
+                        else:
+                            dataString += data.decode()
 
-            # If an error occured in the serial communication
             except Exception as ex:
                 logger.error(f'Serial handler error: {repr(ex)}')
-                #exit_flag.set()
+                try:
+                    if self.serial_port is not None:
+                        self.serial_port.close()
+                except Exception:
+                    pass
+                self._sleep_check(1.0)
 
             time.sleep(0.01)
-        
+
         logger.info(f'Stopping Arduino Thread ({self.port_name})')
 
-    # ---------------------------------------------------------
+    def __reconnect_serial(self):
+        """
+        Try to reopen the serial port after a disconnect.
+        Scans USB ports, looks for the Arduino, and reconnects.
+        """
+        try:
+            if self.serial_port is not None:
+                try:
+                    self.serial_port.close()
+                except Exception:
+                    pass
+                self.serial_port = None
+
+            self._sleep_check(1.0)
+            if self.exit_flag.is_set():
+                return False
+
+            usb_ports = [p.device for p in serial.tools.list_ports.comports()]
+            port_to_try = self.port_name
+
+            if port_to_try not in usb_ports:
+                arduino_ports = [
+                    p.device for p in serial.tools.list_ports.comports()
+                    if 'Arduino' in (p.description or '')
+                    or '2341' in (p.hwid or '')
+                    or 'CDC' in (p.description or '')
+                ]
+                if arduino_ports:
+                    port_to_try = arduino_ports[0]
+                    logger.info(f'Arduino port changed to {port_to_try}')
+                else:
+                    return False
+
+            self.serial_port = Serial(port_to_try, 115200)
+            self.serial_port.flushInput()
+            self.port_name = port_to_try
+            logger.info(f'Serial reconnected on {port_to_try}')
+            return True
+
+        except Exception as ex:
+            logger.warning(f'Reconnect attempt failed: {repr(ex)}')
+            return False
+
+    def _sleep_check(self, secs):
+        """Sleep that respects exit_flag."""
+        end = time.time() + secs
+        while time.time() < end and not self.exit_flag.is_set():
+            time.sleep(0.1)
+
     def __parse_message(self, dataString: str):
         """
         Parse messages received from the connected device
