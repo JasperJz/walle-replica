@@ -141,6 +141,9 @@ class ArduinoDevice:
                 self.serial_port.close()
                 self.serial_port = None
 
+            # 断开时同样清空队列, 防止下次连接时重放陈旧命令
+            self.clear_queue()
+
         except Exception as ex:
             logger.error(f'Serial disconnect error: {repr(ex)}')
 
@@ -274,6 +277,11 @@ class ArduinoDevice:
             self.serial_port = Serial(port_to_try, 115200, timeout=0.1, write_timeout=1)
             self.serial_port.flushInput()
             self.port_name = port_to_try
+            # 丢弃断线期间堆积的陈旧运动命令: 重开串口会 DTR 复位 UNO,
+            # 固件无失联保护, 旧帧重放到重启后的固件上会导致电机失控
+            self.clear_queue()
+            self.queue.put("X0")
+            self.queue.put("Y0")
             logger.info(f'Serial reconnected on {port_to_try}')
             return True
 

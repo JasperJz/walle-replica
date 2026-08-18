@@ -194,7 +194,7 @@ ANIMATIONS = {
     'excited':   EXCITED,     # 兴奋 ~16s
     'hesitant':  HESITANT,    # 犹豫试探 ~15s
     'spin':      SPIN,        # 原地旋转 ~21s
-    'calibrate': CALIBRATE,   # 标定序列 ~24s
+    'calibrate': CALIBRATE,   # 标定序列 ~23s
 }
 
 
@@ -219,6 +219,15 @@ class TrackAnimator:
         """双轴全发: 每帧都是完整状态, 不依赖上一帧残留。"""
         self._arduino.send_command(f"X{self._clamp(x)}")
         self._arduino.send_command(f"Y{self._clamp(y)}")
+
+    def _send_stop(self, attempts=5, interval=0.1):
+        """停机帧带有限重试: 断线时 send_command 返回 False,
+        短暂掉线窗口内重试补发; 更长的掉线由串口重连路径的
+        clear_queue + X0/Y0 兜底 (见 app.py __reconnect_serial)。"""
+        for _ in range(attempts):
+            if self._arduino.send_command("X0") and self._arduino.send_command("Y0"):
+                return
+            time.sleep(interval)
 
     def _sleep(self, secs):
         """可中断 sleep, 每 20ms 检查停止信号。"""
@@ -256,7 +265,7 @@ class TrackAnimator:
         """停止动画并命令电机停转。"""
         with self._lock:
             self._halt()
-            self._send_xy(0, 0)
+            self._send_stop()
 
     def is_running(self):
         return self._thread is not None and self._thread.is_alive()
@@ -275,4 +284,4 @@ class TrackAnimator:
         finally:
             # 无论正常结束/异常/中断, 最后必须命令停机:
             # 原版固件无失联保护, 最后一条 X/Y 会一直生效
-            self._send_xy(0, 0)
+            self._send_stop()
