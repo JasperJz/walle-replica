@@ -22,6 +22,7 @@ import subprocess
 import time
 import tempfile
 from picamera2_stream import PiCameraStreamer
+from track_animations import TrackAnimator
 import logging
 from waitress import serve
 
@@ -107,7 +108,8 @@ class ArduinoDevice:
                 self.disconnect() 
 
                 # Connect to the new port
-                self.serial_port = Serial(port, 115200)
+                # timeout: 防 USB 半死时 read/write 永久阻塞挂死线程
+                self.serial_port = Serial(port, 115200, timeout=0.1, write_timeout=1)
                 self.serial_port.flushInput()
                 self.port_name = port
 
@@ -132,7 +134,7 @@ class ArduinoDevice:
 
             if self.serial_thread is not None:
                 self.exit_flag.set()
-                self.serial_thread.join()
+                self.serial_thread.join(timeout=5)
                 self.serial_thread = None
 
             if self.serial_port is not None:
@@ -173,7 +175,7 @@ class ArduinoDevice:
         """
         Clear the serial send queue
         """
-        while not queue.empty():
+        while not self.queue.empty():
             self.queue.get()
 
     # ---------------------------------------------------------
@@ -269,7 +271,7 @@ class ArduinoDevice:
                 else:
                     return False
 
-            self.serial_port = Serial(port_to_try, 115200)
+            self.serial_port = Serial(port_to_try, 115200, timeout=0.1, write_timeout=1)
             self.serial_port.flushInput()
             self.port_name = port_to_try
             logger.info(f'Serial reconnected on {port_to_try}')
@@ -305,6 +307,8 @@ class ArduinoDevice:
 
 
 arduino: ArduinoDevice = ArduinoDevice()
+
+track_animator: TrackAnimator = TrackAnimator(arduino)
 
 
 ###############################################################
@@ -676,6 +680,43 @@ def animate():
             return jsonify({'status': 'Error', 'msg': 'Arduino not connected'})
     else:
         return jsonify({'status': 'Error', 'msg': 'Unable to read POST data'})
+
+
+# =============================================================
+@app.route('/track', methods=['POST'])
+def track():
+    """
+    Play a track (caterpillar) character animation
+    :return: JSON response with success or error status
+    """
+    if not session.get('active'):
+        return redirect(url_for('login'))
+
+    name = request.form.get('name')
+
+    if name is not None:
+        logger.debug(f"Track: {name}")
+
+        if track_animator.play(name):
+            return jsonify({'status': 'OK'})
+        else:
+            return jsonify({'status': 'Error', 'msg': 'Animation not found or Arduino not connected'})
+    else:
+        return jsonify({'status': 'Error', 'msg': 'Unable to read POST data'})
+
+
+# =============================================================
+@app.route('/track/stop', methods=['POST'])
+def track_stop():
+    """
+    Stop the current track animation and halt the motors
+    :return: JSON response
+    """
+    if not session.get('active'):
+        return redirect(url_for('login'))
+
+    track_animator.stop()
+    return jsonify({'status': 'OK'})
 
 
 # =============================================================

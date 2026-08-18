@@ -259,6 +259,64 @@ function anime(clip, time) {
 
 
 /*
+ * Play a track (caterpillar) character animation
+ */
+function trackAnim(name, time) {
+	$.ajax({
+		url: "/track",
+		type: "POST",
+		data: {"name": name},
+		dataType: "json",
+		beforeSend: function(){
+			// Reset the animation progress bar
+			$('#anime-progress').stop();
+			$('#anime-progress').removeClass('bg-danger');
+			$('#anime-progress').css('width', '0%').attr('aria-valuenow', 0);
+		},
+		success: function(data){
+			// If a response is received from the python backend, but it contains an error
+			if(data.status == "Error"){
+				$('#anime-progress').addClass('bg-danger');
+				$('#anime-progress').css("width", "0%").animate({width: 100+"%"}, 500);
+				showAlert(1, 'Error!', data.msg, 1);
+				return false;
+
+			// Otherwise set the progress bar to show the animation progress
+			} else {
+				$('#anime-progress').css("width", "0%").animate({width: 100+"%"}, time*1000);
+				return true;
+			}
+		},
+		error: function(error) {
+			// If no response was received from the python backend, show an "unknown" error
+			$('#anime-progress').addClass('bg-danger');
+			$('#anime-progress').css("width", "0%").animate({width: 100+"%"}, 500);
+			showAlert(1, 'Unknown Error!', 'Unable to run the animation.', 1);
+			return false;
+		}
+	});
+}
+
+
+/*
+ * Stop the current track animation
+ */
+function trackStop() {
+	$.ajax({
+		url: "/track/stop",
+		type: "POST",
+		data: {},
+		dataType: "json",
+		success: function(data){
+			$('#anime-progress').stop();
+			$('#anime-progress').removeClass('bg-danger');
+			$('#anime-progress').css('width', '0%').attr('aria-valuenow', 0);
+		}
+	});
+}
+
+
+/*
  * Play an audio clip
  */
 function playAudio(clip, time) {
