@@ -137,12 +137,13 @@ class ArduinoDevice:
                 self.serial_thread.join(timeout=5)
                 self.serial_thread = None
 
+            # 断开时清空队列, 防止下次连接时重放陈旧命令
+            # (放在 close() 之前, 即使 close 抛异常队列也已清空)
+            self.clear_queue()
+
             if self.serial_port is not None:
                 self.serial_port.close()
                 self.serial_port = None
-
-            # 断开时同样清空队列, 防止下次连接时重放陈旧命令
-            self.clear_queue()
 
         except Exception as ex:
             logger.error(f'Serial disconnect error: {repr(ex)}')
