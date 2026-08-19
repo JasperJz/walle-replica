@@ -238,6 +238,8 @@ class ArduinoDevice:
                             dataString = ""
                         else:
                             dataString += data.decode()
+                            # 防御: 设备持续输出无换行垃圾时, 行缓冲不能无限增长
+                            if len(dataString) > 256: dataString = ""
 
             except Exception as ex:
                 logger.error(f'Serial handler error: {repr(ex)}')
