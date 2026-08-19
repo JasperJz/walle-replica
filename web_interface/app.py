@@ -886,7 +886,18 @@ if __name__ == '__main__':
     # Debug mode
     if app.config['APP_DEBUG']:
         app.run(port=app.config['APP_PORT'], debug=app.config['APP_DEBUG'], host='0.0.0.0')
-    
+
     # Production mode
     else:
-        serve(app, host='0.0.0.0', port=app.config['APP_PORT'])
+        try:
+            serve(app, host='0.0.0.0', port=app.config['APP_PORT'])
+        except KeyboardInterrupt:
+            pass
+        finally:
+            # 显式停机, 不依赖 atexit(CPython 会先 join 非 daemon 线程再执行 atexit,
+            # 任何遗漏的非 daemon 线程都会让兜底永远轮不到)。walle.service 用 SIGINT
+            # 停服务, KeyboardInterrupt 在主线程触发, 这里的 finally 确定性执行:
+            # 停动画 -> 停相机流 -> 断串口(join 后直写 X0/Y0 停机帧)
+            track_animator.stop()
+            camera.stop_stream()
+            arduino.disconnect()

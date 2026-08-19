@@ -137,7 +137,7 @@ class PiCameraStreamer:
 
                 address = ('', 8080)
                 self.streaming_server = StreamingServer(address, StreamingHandler)
-                self.stream_thread = Thread(target = self.__stream_thread)
+                self.stream_thread = Thread(target = self.__stream_thread, daemon=True)
                 self.stream_thread.start()
                 self.stream_active = True
 
