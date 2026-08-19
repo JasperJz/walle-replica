@@ -86,5 +86,5 @@ sudo systemctl restart walle.service
 5. 播放中推摇杆再松开：动画不受影响（摇杆只改当前目标，动画下一帧会覆盖——如需手动优先，先点 STOP）
 
 运维规则：
-- **重启服务前先点 STOP TRACKS**（或确认无动画在跑）——`systemctl restart` 会杀掉动画线程，最后一条速度命令会留在固件里持续生效。atexit 兜底已加，但别依赖它
+- **重启服务前先点 STOP TRACKS**（或确认无动画在跑）——`systemctl restart` 的停机兜底是 atexit 尽力发送停机帧，但相机流线程（原版代码，非 daemon）可能使进程退出延迟到 systemd 超时（unit 已设 `TimeoutStopSec=10`）。别依赖兜底，先手动停
 - 长时间连续跑 puppy/excited 后摸一下 L298 温度，热则停（满速段电流应力大）

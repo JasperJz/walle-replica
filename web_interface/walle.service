@@ -7,6 +7,7 @@ Type=simple
 WorkingDirectory=/path-to-directory/web_interface
 ExecStart=/usr/bin/python3 app.py
 KillSignal=SIGINT
+TimeoutStopSec=10
 Restart=on-failure
 Environment=XDG_RUNTIME_DIR=/run/user/1000
 User=username

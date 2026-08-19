@@ -116,7 +116,9 @@ class ArduinoDevice:
 
                 # Start the command handler in a background thread
                 self.exit_flag.clear()
-                self.serial_thread = Thread(target = self.__communication_thread)
+                # daemon=True: 保证进程退出路径可达(atexit 先 join 非 daemon 线程,
+                # 通信线程只认 exit_flag, 非 daemon 会让整个进程退出时挂死)
+                self.serial_thread = Thread(target = self.__communication_thread, daemon=True)
                 self.serial_thread.start()
 
         except Exception as ex:
@@ -133,15 +135,6 @@ class ArduinoDevice:
         try:
             self.battery_level = None
 
-            # 尽力补发停机帧(直接写串口, 不走队列): 服务重启/进程退出时
-            # 动画可能正带着速度跑, 原版固件无失联保护, 最后命令永久生效
-            if self.serial_port is not None and self.serial_port.is_open:
-                try:
-                    self.serial_port.write(b"X0\n")
-                    self.serial_port.write(b"Y0\n")
-                except Exception:
-                    pass
-
             if self.serial_thread is not None:
                 self.exit_flag.set()
                 self.serial_thread.join(timeout=5)
@@ -150,6 +143,16 @@ class ArduinoDevice:
             # 断开时清空队列, 防止下次连接时重放陈旧命令
             # (放在 close() 之前, 即使 close 抛异常队列也已清空)
             self.clear_queue()
+
+            # 停机帧必须在 join 之后直写: 此时通信线程已死、is_connected() 为 False,
+            # 任何生产者的 send_command 都会失效, 这两条必然是线上最后的命令
+            # (原版固件无失联保护, 最后一条 X/Y 永久生效)
+            if self.serial_port is not None and self.serial_port.is_open:
+                try:
+                    self.serial_port.write(b"X0\n")
+                    self.serial_port.write(b"Y0\n")
+                except Exception:
+                    pass
 
             if self.serial_port is not None:
                 self.serial_port.close()
