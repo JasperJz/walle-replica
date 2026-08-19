@@ -21,6 +21,7 @@ import serial.tools.list_ports
 import subprocess
 import time
 import tempfile
+import atexit
 from picamera2_stream import PiCameraStreamer
 from track_animations import TrackAnimator
 import logging
@@ -131,6 +132,15 @@ class ArduinoDevice:
         """
         try:
             self.battery_level = None
+
+            # 尽力补发停机帧(直接写串口, 不走队列): 服务重启/进程退出时
+            # 动画可能正带着速度跑, 原版固件无失联保护, 最后命令永久生效
+            if self.serial_port is not None and self.serial_port.is_open:
+                try:
+                    self.serial_port.write(b"X0\n")
+                    self.serial_port.write(b"Y0\n")
+                except Exception:
+                    pass
 
             if self.serial_thread is not None:
                 self.exit_flag.set()
@@ -319,6 +329,10 @@ arduino: ArduinoDevice = ArduinoDevice()
 
 track_animator: TrackAnimator = TrackAnimator(arduino)
 
+# 进程退出(systemctl stop / Ctrl-C)时兜底断开: disconnect 会尽力补发停机帧,
+# 防止动画播放中重启服务导致机器人带着最后速度跑走
+atexit.register(arduino.disconnect)
+
 
 ###############################################################
 #
@@ -375,7 +389,7 @@ def index():
     # Get list of connected USB devices
     ports = serial.tools.list_ports.comports()
     usb_ports = [
-        p.description
+        p.device
         for p in ports
     ]
 
@@ -775,7 +789,7 @@ def arduinoConnect():
 
             # Get list of connected USB devices
             ports = serial.tools.list_ports.comports()
-            usb_ports = [p.description for p in ports]
+            usb_ports = [p.device for p in ports]
 
             # Ensure that the preferred Arduino port is selected by default
             selectedPort = 0
