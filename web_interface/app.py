@@ -23,7 +23,7 @@ import time
 import tempfile
 import atexit
 from picamera2_stream import PiCameraStreamer
-from track_animations import TrackAnimator
+from track_animations import TrackAnimator, ANIMATIONS, DISPLAY, animation_length
 import logging
 from waitress import serve
 
@@ -439,6 +439,10 @@ def index():
                            portSelect=selectedPort,
                            connected=arduino.is_connected(),
                            cameraActive=camera.is_stream_active(),
+                           trackItems=[{'name': n,
+                                        'label': DISPLAY.get(n, n),
+                                        'secs': animation_length(n)}
+                                       for n in ANIMATIONS],
                            errorMessages=errors)
 
 
@@ -484,6 +488,11 @@ def motor():
     stickY = request.form.get('stickY')
 
     if stickX is not None and stickY is not None:
+
+        # 手动输入优先: 任何摇杆/手柄输入立即抢占正在播放的履带动画
+        # (先停动画再发本条命令, 保证最终目标是操作者的手)
+        if track_animator.is_running():
+            track_animator.stop()
         xVal = int(float(stickX) * 100)
         yVal = int(float(stickY) * 100)
 

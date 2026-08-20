@@ -274,14 +274,9 @@
 											<span class="badge badge-info badge-pill">8</span>
 										</a>
 										<div class="collapse show" id="track-animations" data-parent="#anime-accordion">
-											<a href="#" class="list-group-item list-group-item-action" onclick="trackAnim('curious',17)">Curious Approach <i class="entry-time">&nbsp; | &nbsp; 17s</i></a>
-											<a href="#" class="list-group-item list-group-item-action" onclick="trackAnim('startled',14)">Startled Escape <i class="entry-time">&nbsp; | &nbsp; 14s</i></a>
-											<a href="#" class="list-group-item list-group-item-action" onclick="trackAnim('patrol',34)">Square Patrol <i class="entry-time">&nbsp; | &nbsp; 34s</i></a>
-											<a href="#" class="list-group-item list-group-item-action" onclick="trackAnim('puppy',45)">Puppy Play <i class="entry-time">&nbsp; | &nbsp; 45s</i></a>
-											<a href="#" class="list-group-item list-group-item-action" onclick="trackAnim('excited',16)">Excited <i class="entry-time">&nbsp; | &nbsp; 16s</i></a>
-											<a href="#" class="list-group-item list-group-item-action" onclick="trackAnim('hesitant',15)">Hesitant <i class="entry-time">&nbsp; | &nbsp; 15s</i></a>
-											<a href="#" class="list-group-item list-group-item-action" onclick="trackAnim('spin',21)">Full Spin <i class="entry-time">&nbsp; | &nbsp; 21s</i></a>
-											<a href="#" class="list-group-item list-group-item-action" onclick="trackAnim('calibrate',23)">Calibration Run <i class="entry-time">&nbsp; | &nbsp; 23s</i></a>
+											{% for t in trackItems %}
+											<a href="#" class="list-group-item list-group-item-action" onclick="trackAnim('{{ t.name }}', {{ t.secs }})">{{ t.label }} <i class="entry-time">&nbsp; | &nbsp; {{ t.secs }}s</i></a>
+											{% endfor %}
 											<a href="#" class="list-group-item list-group-item-action list-group-item-danger" onclick="trackStop()">STOP TRACKS <i class="entry-time">&nbsp; | &nbsp; immediate</i></a>
 										</div>
 									</div>

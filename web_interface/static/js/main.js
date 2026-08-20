@@ -787,7 +787,7 @@ function pressButton(e) {
 	} else if (buttonName === 'button_15') {
 		var fileNames = [];
 		var fileLengths = [];
-		$("#anime-accordion div div a").each(function() { 
+		$("#all-animations a").each(function() {
 			fileNames.push($(this).attr('file-name'));
 			fileLengths.push($(this).attr('file-length'));
 		});
