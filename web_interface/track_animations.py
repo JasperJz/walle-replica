@@ -55,7 +55,8 @@ SLOW   = 48    # 犹豫/试探步 (必须 < PROBE: 胆子越小步子越慢)
 BACK   = 55    # 常规后退
 PROBE  = 55    # 好奇探步
 CRUISE = 70    # 巡逻巡航 / 下定决心
-SPRINT = 100   # 冲刺/逃离 (满速, 稀缺词汇)
+SPRINT = 100   # 冲刺/逃离 (满速) — 长冲刺是稀缺词汇, 只属于 startled 的
+               # 逃亡与 excited 的高潮; puppy 只保留点睛短冲
 
 PAUSE_GAP = 0.3     # 动作间常规停顿(秒)
 SPRINT_GAP = 0.45   # 满速后的停顿要更长 (0.3s 斜坡还没停稳)
@@ -130,7 +131,8 @@ PUPPY = [
     (0, 0, 0.2),
     (50, 86, pivot(180)),   # 贴身大弧线绕到背面 (换个姿态转, 不再陀螺)
     (0, 0, PAUSE_GAP),
-    (SPRINT, 0, 0.6),       # 开心冲刺一小段!
+    (SPRINT, 0, 0.6),       # 开心冲刺一小段! (净朝向: 表末朝向与开场相差 180°,
+                            #  弧线绕回后冲向来时方向, "跑回来找你"的意图)
     STOP_FRAME,
 ]
 
@@ -275,6 +277,8 @@ class TrackAnimator:
         thread = self._thread
         if thread is not None and thread.is_alive():
             thread.join(timeout=2)
+            if thread.is_alive():
+                logging.warning('Track animation thread did not exit within 2s')
         self._thread = None
         # 丢弃队列里旧动画的残留命令, 防止停止后又漏发出去
         self._arduino.clear_queue()
@@ -321,13 +325,15 @@ class TrackAnimator:
                     duration *= random.uniform(0.92, 1.08)
                 if not self._send_xy(x, y):
                     # 发送失败 = 串口断开/重连中; 连续多帧失败说明链路已不可用,
-                    # 从表格中段复活只会呈现残缺节拍, 不如体面中止
+                    # 从表格中段复活只会呈现残缺节拍, 不如体面中止。
+                    # 失败帧机器人根本没收到, 不睡满帧长 — 短探活间隔快速累计
                     fail_streak += 1
                     if fail_streak >= 3:
                         logging.warning(f'Track animation [{name}] aborted: serial link lost')
                         return
-                else:
-                    fail_streak = 0
+                    self._sleep(stop_event, 0.2)
+                    continue
+                fail_streak = 0
                 self._sleep(stop_event, duration)
         except Exception as ex:
             logging.error(f'Track animation error [{name}]: {repr(ex)}')
