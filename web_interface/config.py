@@ -13,7 +13,7 @@ APP_PORT = 5000                                         # Port of the applicatio
 APP_DEBUG = False                                       # Enable / Disable Python Server Debugging
 LOGIN_PASSWORD = "walle"                                # Password for web-interface
 ARDUINO_PORT = "/dev/ttyACM0"                           # Default port which will be selected
-AUTOSTART_ARDUINO = True                                # False = no auto connect, True = automatically try to connect to default port
+AUTOSTART_ARDUINO = False                               # 首次连接由 app.py 的 _boot_autostart() 在启动 15s 后无人值守执行(防登录浪涌), 首页路由不再自动连 Arduino
 AUTOSTART_CAM = True                                    # False = no auto start, True = automatically start up the camera
 SOUND_FOLDER = os.path.join(BASEDIR, "static/sounds/")  # Location of the folder containing all audio files
 ESPEAK_CMD = ['espeak-ng', '-v', 'en', '-b', '1']       # ESpeak Command and Language

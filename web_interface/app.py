@@ -15,7 +15,7 @@ from flask import Flask, request, session, redirect, url_for, jsonify, render_te
 import os
 import sys
 from queue import Queue
-from threading import Event, Thread
+from threading import Event, RLock, Thread
 from serial import Serial
 import serial.tools.list_ports
 import subprocess
@@ -65,6 +65,8 @@ logger.addHandler(stream_handler)
 class ArduinoDevice:
     """Class used for managing communication with the Arduino"""
 
+    _conn_lock = RLock()
+
     # ---------------------------------------------------------
     def __init__(self):
         """
@@ -91,38 +93,42 @@ class ArduinoDevice:
         :param port: The port to connect to (leave blank to use previous port)
         :return: True if connected successfully, False otherwise
         """
-        try:
-            usb_ports = [
-                p.device for p in serial.tools.list_ports.comports()
-            ]
+        # _conn_lock: connect/disconnect 可能由 启动自连线程/路由线程 并发进入,
+        # 双开同一串口 = 第二次 DTR 复位(恰是浪涌源头), 必须互斥。
+        # RLock: connect() 内部会先调 self.disconnect() 清场, 需可重入。
+        with self._conn_lock:
+            try:
+                usb_ports = [
+                    p.device for p in serial.tools.list_ports.comports()
+                ]
 
-            if type(port) is str and port == "":
-                port = self.port_name
+                if type(port) is str and port == "":
+                    port = self.port_name
 
-            if type(port) is int and port >= 0 and port < len(usb_ports):
-                port = usb_ports[port]
+                if type(port) is int and port >= 0 and port < len(usb_ports):
+                    port = usb_ports[port]
 
-            # Check port exists and we are not already connected
-            if ((not self.is_connected() or port != self.port_name) and port in usb_ports):
-                
-               # Ensure old port is properly disconnected first
-                self.disconnect() 
+                # Check port exists and we are not already connected
+                if ((not self.is_connected() or port != self.port_name) and port in usb_ports):
 
-                # Connect to the new port
-                # timeout: 防 USB 半死时 read/write 永久阻塞挂死线程
-                self.serial_port = Serial(port, 115200, timeout=0.1, write_timeout=1)
-                self.serial_port.flushInput()
-                self.port_name = port
+                   # Ensure old port is properly disconnected first
+                    self.disconnect()
 
-                # Start the command handler in a background thread
-                self.exit_flag.clear()
-                # daemon=True: 保证进程退出路径可达(atexit 先 join 非 daemon 线程,
-                # 通信线程只认 exit_flag, 非 daemon 会让整个进程退出时挂死)
-                self.serial_thread = Thread(target = self.__communication_thread, daemon=True)
-                self.serial_thread.start()
+                    # Connect to the new port
+                    # timeout: 防 USB 半死时 read/write 永久阻塞挂死线程
+                    self.serial_port = Serial(port, 115200, timeout=0.1, write_timeout=1)
+                    self.serial_port.flushInput()
+                    self.port_name = port
 
-        except Exception as ex:
-            logger.error(f'Serial connect error: {repr(ex)}')
+                    # Start the command handler in a background thread
+                    self.exit_flag.clear()
+                    # daemon=True: 保证进程退出路径可达(atexit 先 join 非 daemon 线程,
+                    # 通信线程只认 exit_flag, 非 daemon 会让整个进程退出时挂死)
+                    self.serial_thread = Thread(target = self.__communication_thread, daemon=True)
+                    self.serial_thread.start()
+
+            except Exception as ex:
+                logger.error(f'Serial connect error: {repr(ex)}')
 
         return self.is_connected()
 
@@ -132,34 +138,37 @@ class ArduinoDevice:
         Disconnect from the serial port
         :return: True if disconnected successfully, False otherwise
         """
-        try:
-            self.battery_level = None
+        # 与 connect() 同锁(见 connect() 内注释); RLock 保证 connect 内部
+        # 的清场调用可重入
+        with self._conn_lock:
+            try:
+                self.battery_level = None
 
-            if self.serial_thread is not None:
-                self.exit_flag.set()
-                self.serial_thread.join(timeout=5)
-                self.serial_thread = None
+                if self.serial_thread is not None:
+                    self.exit_flag.set()
+                    self.serial_thread.join(timeout=5)
+                    self.serial_thread = None
 
-            # 断开时清空队列, 防止下次连接时重放陈旧命令
-            # (放在 close() 之前, 即使 close 抛异常队列也已清空)
-            self.clear_queue()
+                # 断开时清空队列, 防止下次连接时重放陈旧命令
+                # (放在 close() 之前, 即使 close 抛异常队列也已清空)
+                self.clear_queue()
 
-            # 停机帧必须在 join 之后直写: 此时通信线程已死、is_connected() 为 False,
-            # 任何生产者的 send_command 都会失效, 这两条必然是线上最后的命令
-            # (原版固件无失联保护, 最后一条 X/Y 永久生效)
-            if self.serial_port is not None and self.serial_port.is_open:
-                try:
-                    self.serial_port.write(b"X0\n")
-                    self.serial_port.write(b"Y0\n")
-                except Exception:
-                    pass
+                # 停机帧必须在 join 之后直写: 此时通信线程已死、is_connected() 为 False,
+                # 任何生产者的 send_command 都会失效, 这两条必然是线上最后的命令
+                # (原版固件无失联保护, 最后一条 X/Y 永久生效)
+                if self.serial_port is not None and self.serial_port.is_open:
+                    try:
+                        self.serial_port.write(b"X0\n")
+                        self.serial_port.write(b"Y0\n")
+                    except Exception:
+                        pass
 
-            if self.serial_port is not None:
-                self.serial_port.close()
-                self.serial_port = None
+                if self.serial_port is not None:
+                    self.serial_port.close()
+                    self.serial_port = None
 
-        except Exception as ex:
-            logger.error(f'Serial disconnect error: {repr(ex)}')
+            except Exception as ex:
+                logger.error(f'Serial disconnect error: {repr(ex)}')
 
         return (self.serial_thread is None and self.serial_port is None)
 
@@ -329,6 +338,9 @@ class ArduinoDevice:
 # End of class: ArduinoDevice
 
 
+
+# 启动自连线程的取消标志: 服务关停(finally)或用户手动操作串口(/settings)时置位
+_boot_cancel: Event = Event()
 
 arduino: ArduinoDevice = ArduinoDevice()
 
@@ -818,6 +830,8 @@ def arduinoConnect():
         elif action == "reconnect":
 
             logger.debug("Reconnect to Arduino")
+            # 用户手动操作串口 = 明确意图, 取消启动自连线程的重试
+            _boot_cancel.set()
 
             if arduino.is_connected():
                 arduino.disconnect()
@@ -891,6 +905,28 @@ def arduinoStatus():
 #
 ###############################################################
 
+def _boot_autostart():
+    """启动后自动连接 Arduino(无人值守窗口), 共尝试 4 次。
+
+    打开串口会复位 UNO → 7 舵机同时回位, 供电临界的机器人会被这波浪涌
+    整机打崩(2026-08-21 实测)。首次连接因此从"用户首次打开网页"(config
+    里 AUTOSTART_ARDUINO 已置 False)挪到启动 15s 后执行, 崩了由 systemd
+    重启兜底, 登录时串口已连好、不再触发复位。用户手动重连(/settings)
+    或服务关停(finally)会置位 _boot_cancel 终止本线程。
+    """
+    for attempt, delay in enumerate((15, 10, 15, 20)):
+        time.sleep(delay)
+        if _boot_cancel.is_set() or arduino.is_connected():
+            return
+        if _boot_cancel.is_set():  # 复审 R1: 抢锁前再查一次, 压缩与手动重连的交错窗口
+            return
+        if arduino.connect(app.config['ARDUINO_PORT']):
+            logger.info(f'Boot auto-connect: Arduino connected on {arduino.port_name}')
+            return
+        logger.warning(f'Boot auto-connect failed ({attempt + 1}/4)')
+    logger.warning('Boot auto-connect abandoned - connect manually in Settings')
+
+
 if __name__ == '__main__':
     # Debug mode
     if app.config['APP_DEBUG']:
@@ -898,11 +934,13 @@ if __name__ == '__main__':
 
     # Production mode
     else:
+        Thread(target=_boot_autostart, daemon=True).start()
         try:
             serve(app, host='0.0.0.0', port=app.config['APP_PORT'])
         except KeyboardInterrupt:
             pass
         finally:
+            _boot_cancel.set()
             # 显式停机, 不依赖 atexit(CPython 会先 join 非 daemon 线程再执行 atexit,
             # 任何遗漏的非 daemon 线程都会让兜底永远轮不到)。walle.service 用 SIGINT
             # 停服务, KeyboardInterrupt 在主线程触发, 这里的 finally 确定性执行:
