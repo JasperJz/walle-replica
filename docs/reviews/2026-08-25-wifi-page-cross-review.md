@@ -26,7 +26,7 @@
 | R2-2 | `remove` 对无 security 的 profile 可能非零、跳过 `connection up` | claude P2 | P2 | **实测反驳**: NM 1.52 上 `remove 802-11-wireless-security` 对无该 setting 的 profile 幂等 rc=0。入 rejection log |
 | R2-3 | modify 只查 type，未核对 profile 内保存的 ssid/mode，名字≠SSID 的 profile 会劫持切换 | codex P1 | P1 | **已修**: modify 显式 `802-11-wireless.ssid <ssid>` + `802-11-wireless.mode infrastructure` |
 | R2-4 | scan 未过滤隐藏网络占位符 `--`，出现可点击的 `--` 行且点选报误导错误 | built-in P2 | 裁决 P1 | **已修**（moderator 裁决: 属 round-1 过滤完备性的延续，status 已处理 `--` 而 scan 遗漏，一行修复） |
-| R2-5 | psk 无 `-` 前缀防护，与 ssid 不对称 | built-in P2 | P2 | **记录，待实测**: nmcli 对 dash 开头属性值的行为需在 Pi 上验证后定 |
+| R2-5 | psk 无 `-` 前缀防护，与 ssid 不对称 | built-in P2 | P2 | **实测反驳**: NM 1.52 上 `connection modify X wifi-sec.key-mgmt wpa-psk wifi-sec.psk -hunter22` rc=0、值正确写入（属性名后的 token 按值解析）。ssid 的 dash 拒绝保留为纯防御 |
 | R2-6 | 前端 maxlength=32 按字符、服务端按字节，CJK SSID 输入端放行提交端拒 | built-in P2 | P2 | **记录**: 功能正确仅体验毛刺，错误文案自解释 |
 
 ## Round 1 已记录不修的 P2（流程决定）
@@ -38,6 +38,7 @@ LC_ALL=C 固定 locale；waitress 线程数与 Rescan 防抖；64-hex PSK 放行
 | 评审员 | Claim | 证据 | 裁决 |
 |---|---|---|---|
 | claude R2-2 | `remove 802-11-wireless-security` 对 absent setting 可能非零导致跳过 up | Pi 实测: 建无 security 的 open profile 后 `remove` → rc=0 | **refuted** |
+| built-in R2-5 | dash 开头 psk 可能被 nmcli 当选项解析，modify 失败 | Pi 实测: `psk -hunter22`（合法长度）rc=0 且值正确写入；先前 `-foo` 报错系 4 字符长度校验，非 dash | **refuted** |
 
 ## 实机验证记录（评审期间与修复后）
 
@@ -50,4 +51,4 @@ LC_ALL=C 固定 locale；waitress 线程数与 Rescan 防抖；64-hex PSK 放行
 
 - Pi 上曾存 RaspAP 残留全家桶（dnsmasq/hostapd/raspap/dhcpcd + dhcpcd.conf 的 10.3.141.1 静态段）与 NM 双管家冲突，导致首次热点实测 DHCP 端口占用失败；已全部 disable --now，属可逆操作。
 - 演示脚本 `~/wifi-demo.sh` 首版误用 `nmcli device disconnect`（会冻结 autoconnect，热点永不自启），已改 `nmcli connection down`。
-- **待验证**: 重启后 AP 兜底的自动激活路径（此前实测均为显式 `connection up`）；R2-5 的 nmcli dash 值行为。随机器人恢复在线后补测。
+- **自动兜底路径已实锤**（2026-08-25 15:24，现场演示）：改错密码重启后，NM `policy: auto-activating connection 'WALL-E-Setup'` 自动拉起热点；用户经热点页面填回正确密码，15:27 `WiFi switch: connected to waikato_iot` 完整走通用户故事。
