@@ -1,0 +1,168 @@
+<!doctype html>
+<html lang="en">
+<head>
+    <link rel="shortcut icon" href="{{ url_for('static', filename='favicon.ico') }}">
+
+    <!-- Required meta tags -->
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1, shrink-to-fit=no">
+
+    <!-- Bootstrap CSS -->
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/latoFontFamily.css') }}">
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/bootstrap.min.css') }}">
+    <link rel="stylesheet" type="text/css" href="{{ url_for('static', filename='css/mystyle.css') }}">
+    <title>WALL-E WiFi Settings</title>
+</head>
+<body>
+	<div class="container" style="max-width: 640px; padding-top: 1rem;">
+		<h5>WiFi Settings
+			<a href="/" class="btn btn-outline-secondary btn-sm float-right">Back to Controller</a>
+		</h5>
+
+		<div id="alert-space" class="alert alert-danger" style="display:none"></div>
+
+		<!-- Current status -->
+		<div class="card bg-light" style="margin-bottom: 1rem;">
+			<div class="card-body" id="status-box">Loading status...</div>
+		</div>
+
+		<!-- Scan results -->
+		<div class="card bg-light" style="margin-bottom: 1rem;">
+			<div class="card-header d-flex justify-content-between align-items-center">
+				Available Networks
+				<button class="btn btn-outline-info btn-sm" onclick="scanWifi()">Rescan</button>
+			</div>
+			<ul class="list-group list-group-flush" id="scan-list">
+				<li class="list-group-item text-muted">Press Rescan to search</li>
+			</ul>
+		</div>
+
+		<!-- Connect form -->
+		<div class="card bg-light" style="margin-bottom: 1rem;">
+			<div class="card-header">Connect to a Network</div>
+			<div class="card-body">
+				<div class="form-group">
+					<label>SSID</label>
+					<input class="form-control" id="conn-ssid" maxlength="32" autocomplete="off">
+				</div>
+				<div class="form-group">
+					<label>Password <i>(leave empty for open networks)</i></label>
+					<input type="password" class="form-control" id="conn-psk" maxlength="63" autocomplete="new-password">
+				</div>
+				<div class="form-check">
+					<input class="form-check-input" type="checkbox" id="conn-hidden">
+					<label class="form-check-label" for="conn-hidden">Hidden network</label>
+				</div>
+				<br>
+				<button class="btn btn-info" onclick="connectWifi()">Connect</button>
+				<div class="text-muted" style="margin-top: .5rem;">
+					After submitting, the Pi switches networks and this page may become unreachable.
+					Reach it again from the new network - or re-join the WALL-E-Setup hotspot
+					if the credentials were wrong (give it about a minute to come back).
+				</div>
+			</div>
+		</div>
+
+		<!-- Saved profiles -->
+		<div class="card bg-light">
+			<div class="card-header">Saved Networks</div>
+			<ul class="list-group list-group-flush" id="saved-list"></ul>
+		</div>
+	</div>
+
+    <!-- Optional JavaScript -->
+    <script src="{{ url_for('static', filename='js/jquery-3.7.1.min.js') }}"></script>
+    <script>
+		function escapeHtml(s) {
+			return String(s == null ? "" : s).replace(/[&<>"']/g, function(c) {
+				return {"&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;"}[c];
+			});
+		}
+
+		function showAlert(msg, kind) {
+			$("#alert-space").removeClass("alert-danger alert-info")
+				.addClass(kind === "info" ? "alert-info" : "alert-danger")
+				.text(msg).show();
+		}
+
+		function wifiApi(action, extra, done) {
+			var fd = new FormData();
+			fd.append("action", action);
+			if (extra) { for (var k in extra) fd.append(k, extra[k]); }
+			$.ajax({url: "/wifi/api", type: "POST", data: fd,
+					processData: false, contentType: false, dataType: "json",
+					success: done, error: function() { done(null); }});
+		}
+
+		function refreshStatus() {
+			wifiApi("status", null, function(r) {
+				if (!r || r.status !== "OK") {
+					$("#status-box").text("Status unavailable");
+					return;
+				}
+				var d = r.data;
+				var html = "";
+				if (d.mode === "ap") {
+					html += "<b>Fallback hotspot is active</b> - no known WiFi in range. ";
+					html += "Enter new WiFi credentials below and press Connect.<br>";
+				}
+				html += "Connection: " + escapeHtml(d.connection || "none") + "<br>";
+				html += "Mode: " + escapeHtml(d.mode) + " &nbsp; State: " + escapeHtml(d.state || "?") + "<br>";
+				html += "IP: " + escapeHtml(d.ip || "none");
+				$("#status-box").html(html);
+
+				var saved = "";
+				$.each(d.saved || [], function(i, s) {
+					saved += '<li class="list-group-item d-flex justify-content-between align-items-center">' +
+						escapeHtml(s.name);
+					if (s.active) saved += ' <span class="badge badge-success">active</span>';
+					if (s.hotspot) saved += ' <span class="badge badge-secondary">hotspot</span>';
+					if (!s.autoconnect && !s.hotspot) saved += ' <span class="badge badge-warning">no autoconnect</span>';
+					saved += "</li>";
+				});
+				$("#saved-list").html(saved || '<li class="list-group-item text-muted">None</li>');
+			});
+		}
+
+		function scanWifi() {
+			$("#scan-list").html('<li class="list-group-item text-muted">Scanning...</li>');
+			wifiApi("scan", null, function(r) {
+				if (!r || r.status !== "OK") {
+					$("#scan-list").html('<li class="list-group-item text-muted">' +
+						escapeHtml(r && r.msg ? r.msg : "Scan unavailable") +
+						' - type the SSID manually below.</li>');
+					return;
+				}
+				var html = "";
+				$.each(r.data || [], function(i, n) {
+					html += '<li class="list-group-item list-group-item-action d-flex justify-content-between" ' +
+						'style="cursor: pointer" onclick="pickSsid(this)" data-ssid="' + escapeHtml(n.ssid) + '">' +
+						escapeHtml(n.ssid) + "<span>" + n.signal + "% &middot; " + escapeHtml(n.security) + "</span></li>";
+				});
+				$("#scan-list").html(html || '<li class="list-group-item text-muted">No networks found</li>');
+			});
+		}
+
+		function pickSsid(item) {
+			$("#conn-ssid").val(item.dataset.ssid);
+			$("#conn-psk").val("").focus();
+		}
+
+		function connectWifi() {
+			var ssid = $("#conn-ssid").val();
+			var psk = $("#conn-psk").val();
+			var hidden = $("#conn-hidden").is(":checked") ? "true" : "false";
+			if (!ssid) { showAlert("Please enter an SSID", "danger"); return; }
+			wifiApi("connect", {ssid: ssid, password: psk, hidden: hidden}, function(r) {
+				if (!r) { showAlert("Connection error", "danger"); return; }
+				showAlert(r.msg || "", r.status === "OK" ? "info" : "danger");
+				setTimeout(refreshStatus, 8000);
+			});
+		}
+
+		refreshStatus();
+    </script>
+
+</body>
+<footer></footer>
+</html>

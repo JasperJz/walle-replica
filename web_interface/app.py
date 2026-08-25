@@ -15,7 +15,7 @@ from flask import Flask, request, session, redirect, url_for, jsonify, render_te
 import os
 import sys
 from queue import Queue
-from threading import Event, RLock, Thread
+from threading import Event, Lock, RLock, Thread
 from serial import Serial
 import serial.tools.list_ports
 import subprocess
@@ -897,6 +897,256 @@ def arduinoStatus():
 
     return jsonify({'status': 'Error', 'msg': 'Unable to read POST data'})
 
+
+
+###############################################################
+#
+# WiFi Configuration (NetworkManager)
+#
+# Works together with the "WALL-E-Setup" fallback hotspot
+# profile on the Pi: when no known WiFi is reachable the
+# hotspot comes up automatically (autoconnect-priority -999).
+# Join the hotspot, open this page and hand the Pi new WiFi
+# credentials - no SSH required.
+#
+###############################################################
+
+HOTSPOT_PROFILE = "WALL-E-Setup"
+
+# Let the HTTP response reach the client before the radio switches:
+# when handing over from hotspot to WiFi this host disappears instantly
+_WIFI_SWITCH_DELAY = 4
+
+_wifi_switch_lock = Lock()
+
+
+def _nmcli(args, timeout=40):
+    """
+    Run nmcli as root (passwordless sudo is configured for this user)
+    :param args:    nmcli argument list (arg-list execution, never a shell string)
+    :param timeout: nmcli calls must never hang a request
+    :return:        (returncode, stdout, stderr); rc 124 on timeout
+    """
+    try:
+        result = subprocess.run(["sudo", "-n", "nmcli"] + args,
+                                capture_output=True, text=True, timeout=timeout)
+        return result.returncode, result.stdout, result.stderr
+    except subprocess.TimeoutExpired:
+        return 124, "", "nmcli timeout"
+
+
+def _terse_split(line):
+    """
+    Split an nmcli terse (-t) output line: values escape ':' as '\\:' and
+    '\\' as '\\\\', so split on unescaped colons only and unescape each field
+    :param line: one output line without the trailing newline
+    :return:      list of unescaped field values
+    """
+    fields, buf, i = [], "", 0
+    while i < len(line):
+        if line[i] == "\\" and i + 1 < len(line):
+            buf += line[i:i + 2]
+            i += 2
+        elif line[i] == ":":
+            fields.append(buf)
+            buf = ""
+            i += 1
+        else:
+            buf += line[i]
+            i += 1
+    fields.append(buf)
+    return [f.replace("\\:", ":").replace("\\\\", "\\") for f in fields]
+
+
+def _wifi_status_data():
+    """
+    Collect wlan0 status and the list of saved WiFi profiles
+    :return: dict with mode/connection/state/ip/saved keys
+    """
+    data = {"mode": "unknown", "connection": None, "state": None,
+            "ip": None, "saved": []}
+
+    code, out, _ = _nmcli(["-t", "-f", "DEVICE,TYPE,STATE,CONNECTION",
+                           "device", "status"])
+    if code == 0:
+        for line in out.splitlines():
+            fields = _terse_split(line)
+            if len(fields) >= 4 and fields[0] == "wlan0":
+                data["state"] = fields[2]
+                data["connection"] = None if fields[3] == "--" else ":".join(fields[3:])
+                break
+
+    if data["connection"]:
+        code, out, _ = _nmcli(["-g", "802-11-wireless.mode", "connection",
+                               "show", data["connection"]])
+        if code == 0 and out.strip():
+            data["mode"] = out.strip()
+
+    code, out, _ = _nmcli(["-g", "IP4.ADDRESS", "device", "show", "wlan0"])
+    if code == 0 and out.strip():
+        data["ip"] = " | ".join(x for x in out.split() if x)
+
+    code, out, _ = _nmcli(["-t", "-f", "NAME,TYPE,AUTOCONNECT",
+                           "connection", "show"])
+    if code == 0:
+        for line in out.splitlines():
+            fields = _terse_split(line)
+            if len(fields) >= 3 and fields[1] == "802-11-wireless":
+                data["saved"].append({
+                    "name": fields[0],
+                    "autoconnect": fields[2] == "yes",
+                    "active": fields[0] == data["connection"],
+                    "hotspot": fields[0] == HOTSPOT_PROFILE,
+                })
+
+    return data
+
+
+def _wifi_switch_worker(ssid, psk, hidden):
+    """
+    Create or update the WiFi profile and activate it (runs in background)
+    :param ssid:    network name (doubles as the profile name)
+    :param psk:     password (empty string for open networks)
+    :param hidden:  whether the network does not broadcast its SSID
+    """
+    try:
+        time.sleep(_WIFI_SWITCH_DELAY)
+
+        # Open networks carry no wifi-sec setting at all ('open' is not a
+        # valid key-mgmt value); an existing profile keeps stale security
+        # until the whole setting is removed below
+        security = (["wifi-sec.key-mgmt", "wpa-psk", "wifi-sec.psk", psk]
+                    if psk else [])
+        hidden_arg = ["802-11-wireless.hidden", "yes" if hidden else "no"]
+
+        # A profile already exists under this name; only ever touch WiFi
+        # profiles, and force ssid/mode so a profile whose stored SSID or
+        # mode diverges from its name cannot hijack the switch
+        code, out, _ = _nmcli(["-g", "connection.type", "connection", "show", ssid])
+        if code == 0:
+            if out.strip() != "802-11-wireless":
+                logger.warning(f'WiFi switch: profile [{ssid}] exists but is not a WiFi profile - skipped')
+                return
+            code, _, err = _nmcli(["connection", "modify", ssid,
+                                   "802-11-wireless.ssid", ssid,
+                                   "802-11-wireless.mode", "infrastructure",
+                                   "autoconnect", "yes"]
+                                  + security + hidden_arg)
+            if code == 0 and not psk:
+                code, _, err = _nmcli(["connection", "modify", ssid,
+                                       "remove", "802-11-wireless-security"])
+        else:
+            code, _, err = _nmcli(["connection", "add", "type", "wifi",
+                                   "ifname", "wlan0", "con-name", ssid,
+                                   "ssid", ssid, "autoconnect", "yes"]
+                                  + security + hidden_arg)
+
+        if code != 0:
+            logger.warning(f'WiFi switch: profile update failed: {err.strip()}')
+            return
+
+        code, _, err = _nmcli(["connection", "up", ssid], timeout=120)
+        if code == 0:
+            logger.info(f'WiFi switch: connected to {ssid}')
+        else:
+            # Wrong password etc. - NetworkManager re-activates the fallback
+            # hotspot, so this page stays reachable for a retry
+            logger.warning(f'WiFi switch: connection up failed: {err.strip()}')
+
+    except Exception as ex:
+        logger.error(f'WiFi switch error: {repr(ex)}')
+    finally:
+        _wifi_switch_lock.release()
+
+
+# =============================================================
+@app.route('/wifi')
+def wifi_page():
+    """
+    Show the WiFi configuration page
+    :return: Render HTML template for the webpage
+    """
+    if not session.get('active'):
+        return redirect(url_for('login'))
+
+    return render_template('wifi.html')
+
+
+# =============================================================
+@app.route('/wifi/api', methods=['POST'])
+def wifi_api():
+    """
+    WiFi status / scan / connect via NetworkManager
+    :return: JSON response with success or error status
+    """
+    if not session.get('active'):
+        return redirect(url_for('login'))
+
+    action = request.form.get('action')
+
+    if action == "status":
+        return jsonify({'status': 'OK', 'data': _wifi_status_data()})
+
+    elif action == "scan":
+        code, out, err = _nmcli(["-t", "-f", "SSID,SIGNAL,SECURITY",
+                                 "device", "wifi", "list", "--rescan", "yes"],
+                                timeout=45)
+        if code != 0:
+            return jsonify({'status': 'Error',
+                            'msg': 'Scan failed - enter the SSID manually'})
+
+        networks = {}
+        for line in out.splitlines():
+            fields = _terse_split(line)
+            # '--' is nmcli's placeholder for the unknown SSID of a hidden network
+            if (len(fields) == 3 and fields[0]
+                    and fields[0] != "--" and fields[0] != HOTSPOT_PROFILE):
+                signal = int(fields[1]) if fields[1].isdigit() else 0
+                if fields[0] not in networks or signal > networks[fields[0]][0]:
+                    networks[fields[0]] = (signal, fields[2])
+
+        return jsonify({'status': 'OK', 'data': [
+            {"ssid": s, "signal": networks[s][0], "security": networks[s][1]}
+            for s in sorted(networks, key=lambda s: -networks[s][0])
+        ]})
+
+    elif action == "connect":
+        # Keep the SSID exactly as entered (leading/trailing spaces are
+        # legal SSID bytes); only use strip() for the emptiness check
+        ssid = request.form.get('ssid') or ""
+        psk = request.form.get('password') or ""
+        hidden = request.form.get('hidden') == "true"
+
+        # Input validation - values are passed to nmcli as argv entries,
+        # so shell injection is impossible, but nmcli option parsing must
+        # not be confused either
+        raw = ssid.encode("utf-8")
+        if not ssid.strip() or not (1 <= len(raw) <= 32):
+            return jsonify({'status': 'Error', 'msg': 'SSID must be 1-32 bytes long'})
+        if ssid == HOTSPOT_PROFILE:
+            return jsonify({'status': 'Error',
+                            'msg': 'This is the robot\'s own setup hotspot - it cannot be reconfigured here'})
+        if ssid.startswith("-") or any(ord(c) < 32 or ord(c) == 127 for c in ssid):
+            return jsonify({'status': 'Error', 'msg': 'SSID contains invalid characters'})
+        if psk and not (8 <= len(psk) <= 63 and psk.isascii() and psk.isprintable()):
+            return jsonify({'status': 'Error',
+                            'msg': 'WPA password must be 8-63 printable ASCII characters (empty = open network)'})
+
+        if not _wifi_switch_lock.acquire(blocking=False):
+            return jsonify({'status': 'Error', 'msg': 'A WiFi switch is already in progress'})
+
+        try:
+            Thread(target=_wifi_switch_worker, args=(ssid, psk, hidden), daemon=True).start()
+        except Exception as ex:
+            _wifi_switch_lock.release()
+            logger.error(f'WiFi switch: failed to start worker: {repr(ex)}')
+            return jsonify({'status': 'Error', 'msg': 'Failed to start the WiFi switch task'})
+
+        return jsonify({'status': 'OK',
+                        'msg': f'Switching to {ssid} in {_WIFI_SWITCH_DELAY} seconds - this page may become unreachable'})
+
+    else:
+        return jsonify({'status': 'Error', 'msg': 'Unable to read [action] POST data'})
 
 
 ###############################################################
