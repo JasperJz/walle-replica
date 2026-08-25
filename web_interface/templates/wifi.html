@@ -22,12 +22,12 @@
 		<div id="alert-space" class="alert alert-danger" style="display:none"></div>
 
 		<!-- Current status -->
-		<div class="card bg-light" style="margin-bottom: 1rem;">
+		<div class="card" style="margin-bottom: 1rem;">
 			<div class="card-body" id="status-box">Loading status...</div>
 		</div>
 
 		<!-- Scan results -->
-		<div class="card bg-light" style="margin-bottom: 1rem;">
+		<div class="card" style="margin-bottom: 1rem;">
 			<div class="card-header d-flex justify-content-between align-items-center">
 				Available Networks
 				<button class="btn btn-outline-info btn-sm" onclick="scanWifi()">Rescan</button>
@@ -38,7 +38,7 @@
 		</div>
 
 		<!-- Connect form -->
-		<div class="card bg-light" style="margin-bottom: 1rem;">
+		<div class="card" style="margin-bottom: 1rem;">
 			<div class="card-header">Connect to a Network</div>
 			<div class="card-body">
 				<div class="form-group">
@@ -55,7 +55,7 @@
 				</div>
 				<br>
 				<button class="btn btn-info" onclick="connectWifi()">Connect</button>
-				<div class="text-muted" style="margin-top: .5rem;">
+				<div style="margin-top: .5rem; color: #d3d3d3;">
 					After submitting, the Pi switches networks and this page may become unreachable.
 					Reach it again from the new network - or re-join the WALL-E-Setup hotspot
 					if the credentials were wrong (give it about a minute to come back).
@@ -64,7 +64,7 @@
 		</div>
 
 		<!-- Saved profiles -->
-		<div class="card bg-light">
+		<div class="card">
 			<div class="card-header">Saved Networks</div>
 			<ul class="list-group list-group-flush" id="saved-list"></ul>
 		</div>
