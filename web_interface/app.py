@@ -1059,6 +1059,142 @@ def _wifi_switch_worker(ssid, psk, hidden):
         _wifi_switch_lock.release()
 
 
+def _wifi_psk_error(psk):
+    """
+    Password validation shared by the connect/edit actions
+    :param psk: password as submitted (empty string = open network)
+    :return:    None when valid, otherwise an error message
+    """
+    if psk and not (8 <= len(psk) <= 63 and psk.isascii() and psk.isprintable()):
+        return 'WPA password must be 8-63 printable ASCII characters (empty = open network)'
+    return None
+
+
+def _wifi_editable_profile(name):
+    """
+    Check that [name] refers to a saved WiFi profile this page may edit or
+    delete: it must exist, be a WiFi profile, be addressed by its exact
+    profile name (the 'id' selector plus resolved-id check keeps UUID /
+    D-Bus path aliases from slipping past the hotspot guard) and never be
+    the fallback hotspot (deleting that would brick the offline setup path)
+    :param name: profile name exactly as shown in the saved list
+    :return:     (True, name) when editable, else (False, error message)
+    """
+    if (not name.strip() or len(name.encode("utf-8")) > 64
+            or name.startswith("-") or name.startswith("/")
+            or any(ord(c) < 32 or ord(c) == 127 for c in name)):
+        return False, 'Invalid profile name'
+    if name == HOTSPOT_PROFILE:
+        return False, 'This is the robot\'s own setup hotspot - it cannot be reconfigured here'
+    code, out, _ = _nmcli(["-g", "connection.id,connection.type",
+                           "connection", "show", "id", name])
+    if code != 0:
+        return False, f'No saved WiFi profile named [{name}] (or the name is ambiguous)'
+    # '-g' prints one field per line and escapes ':' as '\:' and '\' as
+    # '\\' inside values, so unescape each line via _terse_split and keep
+    # the comparison byte-exact (no strip - leading/trailing spaces are
+    # legal name bytes, the connect path deliberately preserves them)
+    lines = out.splitlines()
+    resolved = [_terse_split(ln)[0] if ln.strip() else "" for ln in lines]
+    if len(lines) < 2 or lines[1].strip() != "802-11-wireless":
+        return False, f'[{name}] is not a WiFi profile'
+    if sum(1 for r in resolved if r == name) != 1:
+        return False, f'[{name}] is ambiguous (multiple profiles share this name) - remove the duplicates via SSH'
+    if resolved[0] != name:
+        return False, 'Address the profile by its exact name'
+    return True, name
+
+
+def _wifi_active_connection():
+    """
+    Name of the connection currently active on wlan0
+    :return: (True, name-or-None) when the query succeeded (None = nothing
+             active on wlan0); (False, None) when the query itself failed -
+             callers must not mutate anything in that case, because active
+             and inactive are then indistinguishable
+    """
+    code, out, _ = _nmcli(["-t", "-f", "DEVICE,TYPE,STATE,CONNECTION",
+                           "device", "status"])
+    if code != 0:
+        return False, None
+    for line in out.splitlines():
+        fields = _terse_split(line)
+        if len(fields) >= 4 and fields[0] == "wlan0":
+            return True, (None if fields[3] == "--" else ":".join(fields[3:]))
+    return False, None
+
+
+def _wifi_apply_psk(name, psk):
+    """
+    Store a new password in the saved profile [name] (empty = open network)
+    :return: (returncode, stderr) of the nmcli call
+    """
+    if psk:
+        code, _, err = _nmcli(["connection", "modify", "id", name,
+                               "wifi-sec.key-mgmt", "wpa-psk", "wifi-sec.psk", psk])
+        return code, err
+    code, _, err = _nmcli(["connection", "modify", "id", name,
+                           "remove", "802-11-wireless-security"])
+    return code, err
+
+
+def _wifi_password_worker(name, psk):
+    """
+    Apply a new password to the profile that is currently active and
+    re-activate it, so wrong credentials surface immediately (background)
+    :param name: profile/connection name
+    :param psk:  new password (empty string for open networks)
+    """
+    try:
+        time.sleep(_WIFI_SWITCH_DELAY)
+
+        # The active connection may have changed during the delay; when this
+        # profile is no longer the one in use, only store the password
+        # instead of yanking the radio back to it
+        ok, conn = _wifi_active_connection()
+        code, err = _wifi_apply_psk(name, psk)
+        if code != 0:
+            logger.warning(f'WiFi password: update failed: {err.strip()}')
+            return
+        if not ok or conn != name:
+            logger.info(f'WiFi password: stored for {name} (no longer active, not reconnecting)')
+            return
+
+        code, _, err = _nmcli(["connection", "up", "id", name], timeout=120)
+        if code == 0:
+            logger.info(f'WiFi password: reconnected to {name}')
+        else:
+            # Wrong password etc. - NetworkManager re-activates the fallback
+            # hotspot, so this page stays reachable for a retry
+            logger.warning(f'WiFi password: reconnect failed: {err.strip()}')
+
+    except Exception as ex:
+        logger.error(f'WiFi password error: {repr(ex)}')
+    finally:
+        _wifi_switch_lock.release()
+
+
+def _wifi_forget_worker(name):
+    """
+    Delete the profile that is currently active after the HTTP response has
+    gone out (runs in background)
+    :param name: profile/connection name to delete
+    """
+    try:
+        time.sleep(_WIFI_SWITCH_DELAY)
+
+        code, _, err = _nmcli(["connection", "delete", "id", name])
+        if code == 0:
+            logger.info(f'WiFi forget: deleted profile {name}')
+        else:
+            logger.warning(f'WiFi forget: delete failed: {err.strip()}')
+
+    except Exception as ex:
+        logger.error(f'WiFi forget error: {repr(ex)}')
+    finally:
+        _wifi_switch_lock.release()
+
+
 # =============================================================
 @app.route('/wifi')
 def wifi_page():
@@ -1128,9 +1264,9 @@ def wifi_api():
                             'msg': 'This is the robot\'s own setup hotspot - it cannot be reconfigured here'})
         if ssid.startswith("-") or any(ord(c) < 32 or ord(c) == 127 for c in ssid):
             return jsonify({'status': 'Error', 'msg': 'SSID contains invalid characters'})
-        if psk and not (8 <= len(psk) <= 63 and psk.isascii() and psk.isprintable()):
-            return jsonify({'status': 'Error',
-                            'msg': 'WPA password must be 8-63 printable ASCII characters (empty = open network)'})
+        psk_error = _wifi_psk_error(psk)
+        if psk_error:
+            return jsonify({'status': 'Error', 'msg': psk_error})
 
         if not _wifi_switch_lock.acquire(blocking=False):
             return jsonify({'status': 'Error', 'msg': 'A WiFi switch is already in progress'})
@@ -1144,6 +1280,105 @@ def wifi_api():
 
         return jsonify({'status': 'OK',
                         'msg': f'Switching to {ssid} in {_WIFI_SWITCH_DELAY} seconds - this page may become unreachable'})
+
+    elif action == "edit":
+        # Change the stored password of a saved profile. A non-active
+        # profile is only modified (used next time it connects); the
+        # active one is re-activated in the background to prove the new
+        # credentials while the user still watches
+        name = request.form.get('name') or ""
+        psk = request.form.get('password') or ""
+
+        psk_error = _wifi_psk_error(psk)
+        if psk_error:
+            return jsonify({'status': 'Error', 'msg': psk_error})
+
+        # The lock is held from classification through the mutation, so an
+        # in-flight switch worker can never interleave with this edit (it
+        # is transferred to the delayed worker below when one is spawned)
+        if not _wifi_switch_lock.acquire(blocking=False):
+            return jsonify({'status': 'Error', 'msg': 'A WiFi switch is already in progress'})
+        lock_transferred = False
+        try:
+            ok, msg = _wifi_editable_profile(name)
+            if not ok:
+                return jsonify({'status': 'Error', 'msg': msg})
+
+            # Only open and WPA-PSK profiles fit the single-password model
+            # of this form; writing a psk into e.g. an 802-1x profile would
+            # silently produce a broken configuration
+            code, out, _ = _nmcli(["-g", "802-11-wireless-security.key-mgmt",
+                                   "connection", "show", "id", name])
+            key_mgmt = out.strip() if code == 0 else "?"
+            if key_mgmt not in ("", "wpa-psk"):
+                return jsonify({'status': 'Error',
+                                'msg': f'[{name}] uses "{key_mgmt}" security - only open and WPA-PSK networks can be edited here'})
+
+            ok, conn = _wifi_active_connection()
+            if not ok:
+                return jsonify({'status': 'Error',
+                                'msg': 'WiFi status unavailable - try again'})
+
+            if name == conn:
+                try:
+                    Thread(target=_wifi_password_worker, args=(name, psk), daemon=True).start()
+                    lock_transferred = True
+                except Exception as ex:
+                    logger.error(f'WiFi password: failed to start worker: {repr(ex)}')
+                    return jsonify({'status': 'Error', 'msg': 'Failed to start the WiFi password task'})
+                return jsonify({'status': 'OK',
+                                'msg': f'Saving the new password - reconnecting to {name} in {_WIFI_SWITCH_DELAY}s; '
+                                       f'if it is wrong this page becomes unreachable (re-join the WALL-E-Setup hotspot)'})
+
+            code, err = _wifi_apply_psk(name, psk)
+            if code != 0:
+                return jsonify({'status': 'Error',
+                                'msg': f'Password update failed: {err.strip() or f"nmcli exited with code {code}"}'})
+            return jsonify({'status': 'OK',
+                            'msg': f'Password for {name} saved - used next time the network connects'})
+        finally:
+            if not lock_transferred:
+                _wifi_switch_lock.release()
+
+    elif action == "forget":
+        # Delete a saved profile. Deleting the profile this page is served
+        # over would cut the response off, so that case runs delayed in the
+        # background like a switch; the robot then falls back to another
+        # saved network or the WALL-E-Setup hotspot
+        name = request.form.get('name') or ""
+
+        if not _wifi_switch_lock.acquire(blocking=False):
+            return jsonify({'status': 'Error', 'msg': 'A WiFi switch is already in progress'})
+        lock_transferred = False
+        try:
+            ok, msg = _wifi_editable_profile(name)
+            if not ok:
+                return jsonify({'status': 'Error', 'msg': msg})
+
+            ok, conn = _wifi_active_connection()
+            if not ok:
+                return jsonify({'status': 'Error',
+                                'msg': 'WiFi status unavailable - try again'})
+
+            if name == conn:
+                try:
+                    Thread(target=_wifi_forget_worker, args=(name,), daemon=True).start()
+                    lock_transferred = True
+                except Exception as ex:
+                    logger.error(f'WiFi forget: failed to start worker: {repr(ex)}')
+                    return jsonify({'status': 'Error', 'msg': 'Failed to start the WiFi delete task'})
+                return jsonify({'status': 'OK',
+                                'msg': f'Deleting {name} in {_WIFI_SWITCH_DELAY}s - the robot falls back to '
+                                       f'another saved network or the WALL-E-Setup hotspot'})
+
+            code, _, err = _nmcli(["connection", "delete", "id", name])
+            if code != 0:
+                return jsonify({'status': 'Error',
+                                'msg': f'Delete failed: {err.strip() or f"nmcli exited with code {code}"}'})
+            return jsonify({'status': 'OK', 'msg': f'Removed {name}'})
+        finally:
+            if not lock_transferred:
+                _wifi_switch_lock.release()
 
     else:
         return jsonify({'status': 'Error', 'msg': 'Unable to read [action] POST data'})

@@ -113,11 +113,28 @@
 
 				var saved = "";
 				$.each(d.saved || [], function(i, s) {
-					saved += '<li class="list-group-item d-flex justify-content-between align-items-center">' +
+					saved += '<li class="list-group-item" data-name="' + escapeHtml(s.name) + '">' +
+						'<div class="d-flex justify-content-between align-items-center"><span>' +
 						escapeHtml(s.name);
 					if (s.active) saved += ' <span class="badge badge-success">active</span>';
 					if (s.hotspot) saved += ' <span class="badge badge-secondary">hotspot</span>';
 					if (!s.autoconnect && !s.hotspot) saved += ' <span class="badge badge-warning">no autoconnect</span>';
+					saved += '</span>';
+					if (!s.hotspot) {
+						saved += '<span class="btn-group btn-group-sm">' +
+							'<button class="btn btn-outline-info" onclick="toggleEdit(this)">Edit</button>' +
+							'<button class="btn btn-outline-danger" onclick="forgetSaved(this)">Delete</button>' +
+							'</span>';
+					}
+					saved += '</div>';
+					if (!s.hotspot) {
+						saved += '<div class="input-group input-group-sm" style="display:none; margin-top:.5rem">' +
+							'<input type="password" class="form-control" maxlength="63" autocomplete="new-password" placeholder="New password (empty = open network)">' +
+							'<div class="input-group-append">' +
+							'<button class="btn btn-outline-info" onclick="savePsk(this)">Save</button>' +
+							'<button class="btn btn-outline-secondary" onclick="toggleEdit(this)">Cancel</button>' +
+							'</div></div>';
+					}
 					saved += "</li>";
 				});
 				$("#saved-list").html(saved || '<li class="list-group-item text-muted">None</li>');
@@ -146,6 +163,33 @@
 		function pickSsid(item) {
 			$("#conn-ssid").val(item.dataset.ssid);
 			$("#conn-psk").val("").focus();
+		}
+
+		function toggleEdit(btn) {
+			$(btn).closest("li").find(".input-group").toggle();
+		}
+
+		function savePsk(btn) {
+			var name = $(btn).closest("li").attr("data-name");
+			var psk = $(btn).closest(".input-group").find("input").val();
+			wifiApi("edit", {name: name, password: psk}, function(r) {
+				if (!r) { showAlert("Connection error", "danger"); return; }
+				showAlert(r.msg || "", r.status === "OK" ? "info" : "danger");
+				if (r.status === "OK") $(btn).closest("li").find(".input-group").hide();
+				setTimeout(refreshStatus, 8000);
+			});
+		}
+
+		function forgetSaved(btn) {
+			var name = $(btn).closest("li").attr("data-name");
+			if (!confirm('Remove saved network "' + name + '"?\n' +
+					'If it is the active one the robot disconnects and falls back ' +
+					'to another saved network or the WALL-E-Setup hotspot.')) return;
+			wifiApi("forget", {name: name}, function(r) {
+				if (!r) { showAlert("Connection error", "danger"); return; }
+				showAlert(r.msg || "", r.status === "OK" ? "info" : "danger");
+				setTimeout(refreshStatus, 8000);
+			});
 		}
 
 		function connectWifi() {
